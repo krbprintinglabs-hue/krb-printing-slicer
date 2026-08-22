@@ -1,0 +1,147 @@
+# KRB PrusaSlicer Worker
+
+Headless 3D model slicing worker. Runs as a short-lived GitHub Actions job — no permanent server required.
+
+## Architecture
+
+```
+Customer -> KRB Website -> Firestore (sliceJobs)
+                                |
+                    GitHub Actions workflow_dispatch
+                                |
+                    Fresh Ubuntu runner (x64, 4 CPU, 16GB RAM)
+                                |
+                    Download STL/3MF from Firebase Storage
+                                |
+                    PrusaSlicer CLI (headless)
+                                |
+                    Write results to Firestore
+                                |
+                    Website reads result
+```
+
+**No permanent server. No Oracle Cloud. No polling loop.**
+
+Each slicing request triggers a fresh GitHub Actions job. The runner is destroyed after completion.
+
+## GitHub Actions Setup
+
+### 1. Repository
+
+The worker code lives in a **public** GitHub repository (required for free/unlimited runners).
+
+Recommended: `krb-printing-slicer`
+
+### 2. Repository Secrets
+
+Set these in GitHub -> Settings -> Secrets and variables -> Actions:
+
+| Secret | Description |
+|--------|-------------|
+| `FIREBASE_SERVICE_ACCOUNT` | Contents of your Firebase service account JSON (the entire JSON, not a path) |
+| `FIREBASE_PROJECT_ID` | Your Firebase project ID |
+
+### 3. Website Server Environment Variables
+
+Set these on your Next.js server (NOT in `NEXT_PUBLIC_`):
+
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_SLICER_TOKEN` | GitHub PAT with `actions:write` scope on the slicer repo |
+| `GITHUB_SLICER_REPO` | Repository in `owner/repo` format (e.g., `krb-printing/krb-printing-slicer`) |
+
+### 4. Workflow File
+
+The workflow is at `.github/workflows/slice.yml` in the slicer repository.
+
+## PrusaSlicer Installation
+
+The workflow uses the **community AppImage build** from `gneiss15/PrusaSlicer.AppImage`:
+
+- Version: 2.9.6
+- Platform: Linux x86_64
+- Method: Download AppImage, extract with `--appimage-extract`
+- Cached between runs via `actions/cache`
+
+This is the most reliable headless method since Prusa stopped shipping official Linux AppImages after 2.8.1.
+
+## Quality Profiles
+
+| Preset | Layer Height | Fill Density | Supports | Perimeters |
+|--------|-------------|--------------|----------|------------|
+| Fast | 0.28mm | 10% | Off | 2 |
+| Standard | 0.20mm | 15% | Auto | 2 |
+| High-Detail | 0.16mm | 30% | Auto | 3 |
+
+## Materials
+
+| Material | Nozzle Temp | Bed Temp | Print Speed | Retract |
+|----------|------------|----------|-------------|---------|
+| PLA | 215°C | 60°C | 60mm/s | 0.8mm |
+| PETG | 240°C | 80°C | 50mm/s | 1.0mm |
+| ABS | 250°C | 100°C | 50mm/s | 1.0mm |
+
+## Local Development
+
+```bash
+cd worker
+npm install
+npm run build
+
+# Run with a test jobId
+SLICER_PATH=prusaslicer \
+FIREBASE_PROJECT_ID=your-project \
+FIREBASE_SERVICE_ACCOUNT_PATH=/path/to/sa.json \
+npm run worker -- <jobId>
+```
+
+Or via Docker:
+
+```bash
+docker build -t krb-slicer -f worker/Dockerfile worker/
+docker run --rm \
+  -e FIREBASE_PROJECT_ID=your-project \
+  -v /path/to/sa.json:/tmp/sa.json:ro \
+  -e FIREBASE_SERVICE_ACCOUNT_PATH=/tmp/sa.json \
+  krb-slicer <jobId>
+```
+
+## Test Mode
+
+To test the full pipeline end-to-end:
+
+1. Upload a test STL to Firebase Storage
+2. Create a slice job via `POST /api/slice`
+3. The website triggers the GitHub Actions workflow
+4. Watch the workflow run in GitHub Actions tab
+5. Check Firestore `sliceJobs/{jobId}` for the result
+
+## Security
+
+- Customer STL/3MF files never leave Firebase Storage (downloaded ephemerally by the worker)
+- Firebase credentials are GitHub Actions secrets (never in code or logs)
+- GitHub token is server-side only (never exposed to browser)
+- All PrusaSlicer arguments are whitelisted — no user input passed to shell
+- Worker uses `spawn()` (not `exec()`) for process execution
+- Temporary files are cleaned up after each run
+
+## Files
+
+```
+worker/
+├── src/
+│   ├── config.ts      — Environment configuration
+│   ├── firestore.ts   — Admin SDK, atomic job claiming
+│   ├── storage.ts     — Firebase Storage download/upload
+│   ├── slicer.ts      — PrusaSlicer CLI execution
+│   ├── jobs.ts        — Job lifecycle orchestration
+│   ├── cleanup.ts     — Temp file cleanup (local dev only)
+│   └── index.ts       — One-shot executor entry point
+├── package.json
+├── tsconfig.json
+├── Dockerfile         — Local dev container
+└── README.md
+
+.github/workflows/
+└── slice.yml          — GitHub Actions workflow
+```
