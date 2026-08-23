@@ -101,14 +101,40 @@ jobs:
           (cd "$HOME/prusaslicer-appimage" && "/tmp/prusaslicer.AppImage" --appimage-extract > /dev/null)
           rm -f /tmp/prusaslicer.AppImage
 
+      # The inner layout of the AppImage varies between builds, so instead of
+      # hard-coding squashfs-root/usr/bin/prusa-slicer the CLI binary is
+      # discovered on the runner and verified with --version before use.
       - name: Expose PrusaSlicer on PATH
         run: |
-          BIN="$HOME/prusaslicer-appimage/squashfs-root/usr/bin/prusa-slicer"
-          if [ ! -x "$BIN" ]; then
-            echo "::error::PrusaSlicer binary not found after extraction"
-            find "$HOME/prusaslicer-appimage" -maxdepth 3 -type f | head -50
+          ROOT="$HOME/prusaslicer-appimage/squashfs-root"
+          if [ ! -d "$ROOT" ]; then
+            echo "::error::Extraction directory not found: $ROOT"
+            ls -la "$HOME/prusaslicer-appimage" || true
             exit 1
           fi
+
+          BIN=""
+          while IFS= read -r CANDIDATE; do
+            if [ -x "$CANDIDATE" ] && "$CANDIDATE" --version > /tmp/prusa-version.txt 2>&1; then
+              BIN="$CANDIDATE"
+              break
+            fi
+            echo "Skipping candidate (not executable or --version failed): $CANDIDATE"
+          done < <(find "$ROOT" \( -type f -o -type l \) -name 'prusa-slicer*' 2>/dev/null | sort)
+
+          if [ -z "$BIN" ]; then
+            echo "::error::No working PrusaSlicer executable found under $ROOT"
+            echo "--- top-level extraction layout ---"
+            ls -la "$ROOT"
+            echo "--- prusa-slicer* candidates ---"
+            find "$ROOT" \( -type f -o -type l \) -name 'prusa-slicer*' -exec ls -ld {} + 2>/dev/null || true
+            echo "--- extracted tree (first 200 entries, depth <= 4) ---"
+            find "$ROOT" -maxdepth 4 | sort | head -200
+            exit 1
+          fi
+
+          echo "Discovered PrusaSlicer binary: $BIN"
+          cat /tmp/prusa-version.txt
           sudo ln -sf "$BIN" /usr/local/bin/prusaslicer
           prusaslicer --version
 
