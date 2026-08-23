@@ -1,0 +1,146 @@
+# KRB PrusaSlicer Worker — one-shot slicing job.
+#
+# Dispatched by the KRB website (GITHUB_SLICER_TOKEN, actions:write) with a
+# Firestore `sliceJobs` document ID. The runner is ephemeral: it checks out the
+# worker, downloads the model from the private Supabase Storage bucket
+# ("custom-prints"), slices it with PrusaSlicer CLI, writes the result back to
+# Firestore and exits. No permanent server.
+#
+# Backends:
+#   Firebase — Authentication + Firestore via Admin SDK (job state only)
+#   Supabase — private model storage (STL/3MF download)
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   FIREBASE_SERVICE_ACCOUNT   — full Firebase service-account JSON (contents,
+#                                not a path); used by the Firebase Admin SDK
+#                                for Firestore job access
+#   FIREBASE_PROJECT_ID        — Firebase project ID
+#   SUPABASE_URL               — Supabase project URL
+#   SUPABASE_SERVICE_KEY       — Supabase service key (server-side only)
+#
+# SUPABASE_BUCKET is NOT a secret — it is passed as a plain value
+# (default: custom-prints).
+
+name: Slice Job
+
+on:
+  workflow_dispatch:
+    inputs:
+      jobId:
+        description: "Firestore sliceJobs document ID to process"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PRUSASLICER_VERSION: "2.9.6"
+
+jobs:
+  slice:
+    name: Slice model (PrusaSlicer headless)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install worker dependencies
+        run: npm ci
+
+      - name: Build worker
+        run: npm run build
+
+      # Defense in depth: never let an unvalidated jobId reach a shell or the
+      # filesystem (the worker joins TEMP_DIR + jobId). The value is passed to
+      # every step via env, never interpolated into shell commands.
+      - name: Validate jobId
+        env:
+          JOB_ID: ${{ inputs.jobId }}
+        run: |
+          if ! [[ "$JOB_ID" =~ ^[A-Za-z0-9._-]{1,150}$ ]] || [[ "$JOB_ID" == *".."* ]]; then
+            echo "::error::jobId contains unsupported characters"
+            exit 1
+          fi
+
+      # Community AppImage build (Prusa stopped shipping official Linux
+      # AppImages after 2.8.1). Extracted with --appimage-extract so no FUSE is
+      # needed on the runner. Cached between runs.
+      - name: Cache PrusaSlicer
+        id: prusaslicer_cache
+        uses: actions/cache@v4
+        with:
+          path: ~/prusaslicer-appimage
+          key: prusaslicer-${{ env.PRUSASLICER_VERSION }}-x86_64
+
+      - name: Install PrusaSlicer runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libfontconfig1 libxrender1 \
+            libdbus-1-3 libxkbcommon0 libxcb-xinerama0 libxcb-cursor0 \
+            libxcb-keysyms1 libxcb-shape0 || true
+
+      - name: Download and extract PrusaSlicer
+        if: steps.prusaslicer_cache.outputs.cache-hit != 'true'
+        env:
+          PRUSASLICER_URL: https://github.com/gneiss15/PrusaSlicer.AppImage/releases/download/${{ env.PRUSASLICER_VERSION }}/PrusaSlicer-${{ env.PRUSASLICER_VERSION }}-x86_64_GN.AppImage
+        run: |
+          rm -rf "$HOME/prusaslicer-appimage"
+          mkdir -p "$HOME/prusaslicer-appimage"
+          curl -fL --retry 3 -o /tmp/prusaslicer.AppImage "$PRUSASLICER_URL"
+          chmod +x /tmp/prusaslicer.AppImage
+          (cd "$HOME/prusaslicer-appimage" && "/tmp/prusaslicer.AppImage" --appimage-extract > /dev/null)
+          rm -f /tmp/prusaslicer.AppImage
+
+      - name: Expose PrusaSlicer on PATH
+        run: |
+          BIN="$HOME/prusaslicer-appimage/squashfs-root/usr/bin/prusa-slicer"
+          if [ ! -x "$BIN" ]; then
+            echo "::error::PrusaSlicer binary not found after extraction"
+            find "$HOME/prusaslicer-appimage" -maxdepth 3 -type f | head -50
+            exit 1
+          fi
+          sudo ln -sf "$BIN" /usr/local/bin/prusaslicer
+          prusaslicer --version
+
+      # The worker creates its per-job temp dir inside TEMP_DIR (mkdtemp).
+      - name: Prepare temp directory
+        run: mkdir -p /tmp/krb-slicer
+
+      # Write the service-account secret to RUNNER_TEMP (auto-cleaned after the
+      # job, never logged). The JSON is written verbatim, so multiline
+      # private_key values survive exactly as stored.
+      - name: Write Firebase credentials
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-service-account.json"
+          chmod 600 "$RUNNER_TEMP/firebase-service-account.json"
+
+      # One-shot execution: node dist/index.js <jobId> (same entrypoint as the
+      # Dockerfile). The worker claims the job atomically in Firestore,
+      # downloads the model from private Supabase Storage, slices it, writes
+      # results and exits. jobId reaches the process as a quoted argument
+      # sourced from the validated JOB_ID env var — no direct shell
+      # interpolation of ${{ }}.
+      - name: Run worker
+        env:
+          JOB_ID: ${{ inputs.jobId }}
+          SLICER_PATH: prusaslicer
+          TEMP_DIR: /tmp/krb-slicer
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_SERVICE_ACCOUNT_PATH: ${{ runner.temp }}/firebase-service-account.json
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_BUCKET: custom-prints
+        run: node dist/index.js "$JOB_ID"

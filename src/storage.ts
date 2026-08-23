@@ -1,18 +1,24 @@
 /**
- * Firebase Storage operations using Admin SDK.
+ * Model storage layer.
  *
- * Downloads model files from Firebase Storage to local temporary directories.
+ * Downloads STL/3MF models from the private Supabase Storage bucket via the
+ * Storage REST API (see supabase.ts). Object paths come exclusively from
+ * trusted Firestore job metadata (sliceJobs/{jobId}.storagePath) — never
+ * from arbitrary browser input.
  */
 
-import { getStorage } from "firebase-admin/storage";
-import { join } from "node:path";
-import { mkdir, stat } from "node:fs/promises";
-import { config } from "./config.js";
+import { stat } from "node:fs/promises";
+import { downloadFromSupabase } from "./supabase.js";
 
 /**
- * Download a file from Firebase Storage to a local directory.
+ * Download a model file from Supabase Storage to a local directory.
  *
- * @param storagePath - The Storage path (e.g., "custom-prints/{ownerId}/{uploadId}/model.stl")
+ * Signature unchanged from the previous Firebase Storage implementation so
+ * callers (index.ts, jobs.ts) require no changes.
+ *
+ * @param storagePath - Trusted object path, e.g. "{ownerId}/{uploadId}/model.stl".
+ *   A leading segment equal to the configured bucket name ("custom-prints/...")
+ *   is tolerated and stripped by the Supabase layer.
  * @param destDir - The local directory to save the file to
  * @returns The full path to the downloaded file
  */
@@ -20,24 +26,7 @@ export async function downloadFromStorage(
   storagePath: string,
   destDir: string,
 ): Promise<string> {
-  const bucket = getStorage().bucket();
-  const file = bucket.file(storagePath);
-
-  // Verify the file exists
-  const [exists] = await file.exists();
-  if (!exists) {
-    throw new Error(`File not found in Storage: ${storagePath}`);
-  }
-
-  // Create destination directory
-  await mkdir(destDir, { recursive: true });
-
-  // Extract filename from storage path
-  const filename = storagePath.split("/").pop() ?? "model.stl";
-  const destPath = join(destDir, filename);
-
-  // Download the file
-  await file.download({ destination: destPath });
+  const destPath = await downloadFromSupabase(storagePath, destDir);
 
   // Verify the downloaded file
   const fileInfo = await stat(destPath);
@@ -46,37 +35,4 @@ export async function downloadFromStorage(
   }
 
   return destPath;
-}
-
-/**
- * Get file metadata from Firebase Storage.
- */
-export async function getStorageFileMetadata(storagePath: string) {
-  const bucket = getStorage().bucket();
-  const file = bucket.file(storagePath);
-
-  const [metadata] = await file.getMetadata();
-  return {
-    name: metadata.name,
-    size: parseInt(String(metadata.size ?? "0"), 10),
-    contentType: metadata.contentType,
-    timeCreated: metadata.timeCreated,
-  };
-}
-
-/**
- * Upload a file to Firebase Storage.
- */
-export async function uploadToStorage(
-  storagePath: string,
-  localPath: string,
-  contentType?: string,
-): Promise<void> {
-  const bucket = getStorage().bucket();
-  const file = bucket.file(storagePath);
-
-  await bucket.upload(localPath, {
-    destination: file,
-    contentType,
-  });
 }

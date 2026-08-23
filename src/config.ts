@@ -23,6 +23,15 @@ export const config = {
 
   /** Path to Firebase service account credentials JSON. */
   firebaseServiceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH ?? "",
+
+  /** Supabase project URL (e.g. https://<project>.supabase.co). */
+  supabaseUrl: process.env.SUPABASE_URL ?? "",
+
+  /** Supabase service key — server-side only, never exposed to browsers. */
+  supabaseServiceKey: process.env.SUPABASE_SERVICE_KEY ?? "",
+
+  /** Private Supabase Storage bucket holding uploaded models. */
+  supabaseBucket: process.env.SUPABASE_BUCKET ?? "custom-prints",
 } as const;
 
 /**
@@ -36,6 +45,9 @@ export function validateConfig(): string[] {
   if (!config.firebaseProjectId && !config.firebaseServiceAccountPath) {
     missing.push("FIREBASE_PROJECT_ID or FIREBASE_SERVICE_ACCOUNT_PATH");
   }
+  if (!config.supabaseUrl) missing.push("SUPABASE_URL");
+  if (!config.supabaseServiceKey) missing.push("SUPABASE_SERVICE_KEY");
+  if (!config.supabaseBucket) missing.push("SUPABASE_BUCKET");
 
   return missing;
 }

@@ -11,7 +11,7 @@ Customer -> KRB Website -> Firestore (sliceJobs)
                                 |
                     Fresh Ubuntu runner (x64, 4 CPU, 16GB RAM)
                                 |
-                    Download STL/3MF from Firebase Storage
+                    Download STL/3MF from private Supabase Storage
                                 |
                     PrusaSlicer CLI (headless)
                                 |
@@ -38,8 +38,12 @@ Set these in GitHub -> Settings -> Secrets and variables -> Actions:
 
 | Secret | Description |
 |--------|-------------|
-| `FIREBASE_SERVICE_ACCOUNT` | Contents of your Firebase service account JSON (the entire JSON, not a path) |
+| `FIREBASE_SERVICE_ACCOUNT` | Contents of your Firebase service account JSON (the entire JSON, not a path) — used for Firestore job access |
 | `FIREBASE_PROJECT_ID` | Your Firebase project ID |
+| `SUPABASE_URL` | Your Supabase project URL (e.g. `https://<project>.supabase.co`) |
+| `SUPABASE_SERVICE_KEY` | Supabase service key — server-side only, never exposed to the browser |
+
+The storage bucket is not a secret: the workflow passes `SUPABASE_BUCKET=custom-prints` to the worker.
 
 ### 3. Website Server Environment Variables
 
@@ -92,6 +96,8 @@ npm run build
 SLICER_PATH=prusaslicer \
 FIREBASE_PROJECT_ID=your-project \
 FIREBASE_SERVICE_ACCOUNT_PATH=/path/to/sa.json \
+SUPABASE_URL=https://your-project.supabase.co \
+SUPABASE_SERVICE_KEY=your-service-key \
 npm run worker -- <jobId>
 ```
 
@@ -110,7 +116,7 @@ docker run --rm \
 
 To test the full pipeline end-to-end:
 
-1. Upload a test STL to Firebase Storage
+1. Upload a test STL to the private Supabase Storage bucket
 2. Create a slice job via `POST /api/slice`
 3. The website triggers the GitHub Actions workflow
 4. Watch the workflow run in GitHub Actions tab
@@ -118,9 +124,11 @@ To test the full pipeline end-to-end:
 
 ## Security
 
-- Customer STL/3MF files never leave Firebase Storage (downloaded ephemerally by the worker)
+- Customer STL/3MF files live in the private Supabase Storage bucket (`custom-prints`) and are downloaded ephemerally by the worker
+- The Supabase service key is only ever sent server-side (GitHub Actions runner -> Supabase); it never reaches the browser, URLs, or logs
 - Firebase credentials are GitHub Actions secrets (never in code or logs)
 - GitHub token is server-side only (never exposed to browser)
+- Model paths come exclusively from trusted Firestore job metadata — never from browser input
 - All PrusaSlicer arguments are whitelisted — no user input passed to shell
 - Worker uses `spawn()` (not `exec()`) for process execution
 - Temporary files are cleaned up after each run
@@ -128,20 +136,18 @@ To test the full pipeline end-to-end:
 ## Files
 
 ```
-worker/
-├── src/
-│   ├── config.ts      — Environment configuration
-│   ├── firestore.ts   — Admin SDK, atomic job claiming
-│   ├── storage.ts     — Firebase Storage download/upload
-│   ├── slicer.ts      — PrusaSlicer CLI execution
-│   ├── jobs.ts        — Job lifecycle orchestration
-│   ├── cleanup.ts     — Temp file cleanup (local dev only)
-│   └── index.ts       — One-shot executor entry point
-├── package.json
-├── tsconfig.json
-├── Dockerfile         — Local dev container
-└── README.md
+src/
+├── config.ts      — Environment configuration
+├── firestore.ts   — Admin SDK, atomic job claiming
+├── supabase.ts    — Supabase Storage REST download (service key)
+├── storage.ts     — Model download layer (Supabase-backed)
+├── slicer.ts      — PrusaSlicer CLI execution
+├── jobs.ts        — Job lifecycle orchestration
+├── cleanup.ts     — Temp file cleanup (local dev only)
+└── index.ts       — One-shot executor entry point
+package.json / tsconfig.json
+Dockerfile        — Local dev container
 
 .github/workflows/
-└── slice.yml          — GitHub Actions workflow
+└── slice.yml      — GitHub Actions workflow
 ```
