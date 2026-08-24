@@ -24,7 +24,6 @@ import { initializeFirestore, claimJob, completeJob, failJob, type SliceJob } fr
 import { downloadFromStorage } from "./storage.js";
 import { runPrusaSlicer, checkPrusaSlicer } from "./slicer.js";
 import { mkdtemp, rm } from "node:fs/promises";
-import { readdirSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 /* ── Logging ────────────────────────────────────────────────────────── */
@@ -51,7 +50,6 @@ function log(level: "info" | "warn" | "error", message: string, meta?: object) {
 
 async function processJob(jobId: string): Promise<void> {
   const processingDir = join(config.tempBaseDir, jobId);
-  let inputFilePath: string | undefined;
 
   try {
     // Create temp directory for this job
@@ -78,32 +76,6 @@ async function processJob(jobId: string): Promise<void> {
       quality: (currentJob as SliceJob).quality,
       material: (currentJob as SliceJob).material,
     });
-
-    // TEMPORARY DIAGNOSTICS — remove once "No such file" root cause is fixed.
-    try {
-      const st = statSync(inputFilePath);
-      log("info", "Pre-slice filesystem diagnostics", {
-        jobId,
-        cwd: process.cwd(),
-        slicerPath: config.slicerPath,
-        tempBaseDir: config.tempBaseDir,
-        processingDir: dir,
-        inputFilePath,
-        inputFileExists: existsSync(inputFilePath),
-        fileSizeBytes: st.size,
-        processingDirListing: readdirSync(dir),
-        env_LANG: process.env.LANG ?? null,
-        env_LC_ALL: process.env.LC_ALL ?? null,
-        env_HOME: process.env.HOME ?? null,
-        env_TMPDIR: process.env.TMPDIR ?? null,
-        env_LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ?? null,
-      });
-    } catch (diagErr) {
-      log("warn", "Pre-slice diagnostics failed", {
-        jobId,
-        error: diagErr instanceof Error ? diagErr.message : String(diagErr),
-      });
-    }
 
     // Run PrusaSlicer
     const execution = await runPrusaSlicer(
@@ -162,22 +134,6 @@ async function processJob(jobId: string): Promise<void> {
       errorCode = "INVALID_MATERIAL";
     else if (errorMessage.includes("Failed to start PrusaSlicer"))
       errorCode = "PRUSASLICER_NOT_FOUND";
-
-    // TEMPORARY DIAGNOSTICS — did the input file survive until failure?
-    if (inputFilePath) {
-      log("info", "Post-failure filesystem check", {
-        jobId,
-        inputFilePath,
-        stillExists: existsSync(inputFilePath),
-        processingDirListing: (() => {
-          try {
-            return readdirSync(processingDir + "-");
-          } catch {
-            return "<dir gone>";
-          }
-        })(),
-      });
-    }
 
     await failJob(jobId, errorCode, errorMessage);
 

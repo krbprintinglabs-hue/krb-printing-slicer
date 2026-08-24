@@ -175,52 +175,6 @@ jobs:
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-service-account.json"
           chmod 600 "$RUNNER_TEMP/firebase-service-account.json"
 
-      # TEMPORARY DIAGNOSTICS — remove once "No such file" root cause is fixed.
-      - name: Diagnose PrusaSlicer environment
-        run: |
-          echo "--- SLICER_PATH ---"
-          echo "${SLICER_PATH:-<unset>}"
-          echo "--- command -v /usr/local/bin/prusaslicer ---"
-          command -v /usr/local/bin/prusaslicer || true
-          echo "--- ls -l /usr/local/bin/prusaslicer ---"
-          ls -l /usr/local/bin/prusaslicer || true
-          echo "--- readlink -f ---"
-          RESOLVED="$(readlink -f /usr/local/bin/prusaslicer || true)"
-          echo "$RESOLVED"
-          echo "--- ls -l resolved AppRun ---"
-          ls -l "$RESOLVED" || true
-          echo "--- file resolved executable ---"
-          file "$RESOLVED" || true
-          echo "--- pwd ---"
-          pwd
-          echo "--- relevant non-secret environment ---"
-          for v in LANG LC_ALL HOME TMPDIR TEMP_DIR JOB_ID LD_LIBRARY_PATH APPDIR; do
-            echo "$v=${!v-}"
-          done
-          echo "--- sandbox helpers present? ---"
-          command -v bwrap || echo "bwrap: not installed"
-          command -v unshare || true
-          echo "--- AppRun content scan (launcher type / sandbox markers) ---"
-          if file "$RESOLVED" | grep -qi 'script'; then
-            sed -n '1,60p' "$RESOLVED"
-          else
-            grep -aoE 'bwrap|bubblewrap|unshare|pivot_root|chroot' "$RESOLVED" 2>/dev/null | sort -u || true
-          fi
-          echo "--- file-visibility probe: pass a fresh temp file to PrusaSlicer ---"
-          : > /tmp/krb-slicer/probe.stl 2>/dev/null || : > /tmp/probe.stl
-          PROBE="$(ls /tmp/krb-slicer/probe.stl /tmp/probe.stl 2>/dev/null | head -n1)"
-          echo "probe file: $PROBE"
-          set +e
-          /usr/local/bin/prusaslicer "$PROBE" > /tmp/probe-out.txt 2>&1
-          echo "probe exit code: $?"
-          set -e
-          head -n 5 /tmp/probe-out.txt
-          echo "--- prusaslicer --help ---"
-          set +e
-          /usr/local/bin/prusaslicer --help > /dev/null 2>&1
-          echo "--help exit code: $?"
-          set -e
-
       # One-shot execution: node dist/index.js <jobId> (same entrypoint as the
       # Dockerfile). The worker claims the job atomically in Firestore,
       # downloads the model from private Supabase Storage, slices it, writes
