@@ -121,13 +121,14 @@ jobs:
           (cd "$HOME/prusaslicer-appimage" && "/tmp/prusaslicer.AppImage" --appimage-extract > /dev/null)
           rm -f /tmp/prusaslicer.AppImage
 
-      # The community GN AppImage uses a Sharun layout: bin/prusa-slicer is
-      # only a static launcher stub — the real CLI lives at
-      # shared/bin/prusa-slicer and needs its bundled libraries (APPDIR +
-      # LD_LIBRARY_PATH) plus a valid UTF-8 locale at runtime. PrusaSlicer
-      # 2.9.6 has no --version option, so validation uses --help. The runtime
-      # environment is persisted via GITHUB_ENV because each workflow step
-      # runs in a fresh shell and the worker invokes `prusaslicer` later.
+      # TEMPORARY DIAGNOSTIC ROUND (locale en_US.utf8 is confirmed present,
+      # yet PrusaSlicer still fails with "locale::facet::..."). This run
+      # isolates whether the failure comes from the forced LD_LIBRARY_PATH
+      # (bundled glibc/libstdc++ shadowing the system runtime) or from the
+      # sharun launcher environment. Tests A-D vary LD_LIBRARY_PATH; test E
+      # exercises the AppRun launcher. All output is captured. The job
+      # intentionally does NOT proceed to the worker: no permanent fix is
+      # applied until the root cause is established.
       - name: Expose PrusaSlicer on PATH
         run: |
           ROOT="$HOME/prusaslicer-appimage/squashfs-root"
@@ -143,37 +144,89 @@ jobs:
             exit 1
           fi
 
-          # Persist the AppImage runtime environment for all later steps
-          # (the worker calls SLICER_PATH=prusaslicer in its own shell).
-          # LANG/LC_ALL are persisted by the "Generate UTF-8 locale" step.
-          {
-            echo "APPDIR=$ROOT"
-            echo "LD_LIBRARY_PATH=$ROOT/lib:$ROOT/shared/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          } >> "$GITHUB_ENV"
+          run_sep() {
+            local LABEL="$1"; shift
+            echo "============================================================"
+            echo "--- TEST [$LABEL]: $* ---"
+            set +e
+            "$@" > /tmp/diag-out.txt 2> /tmp/diag-err.txt
+            RC=$?
+            set -e
+            echo "exit code: $RC"
+            echo "----- stdout -----"
+            cat /tmp/diag-out.txt
+            echo "----- stderr -----"
+            cat /tmp/diag-err.txt
+            echo "----- end [$LABEL] -----"
+          }
 
-          echo "--- validating real binary: $BIN ---"
-          set +e
-          APPDIR="$ROOT" \
-          LD_LIBRARY_PATH="$ROOT/lib:$ROOT/shared/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-          LANG=en_US.UTF-8 \
-          LC_ALL=en_US.UTF-8 \
-            "$BIN" --help > /tmp/prusa-help.txt 2>&1
-          RC=$?
-          set -e
-          if [ "$RC" -ne 0 ]; then
-            echo "::error::PrusaSlicer --help validation failed (exit code $RC)"
-            echo "--- locale ---"
-            locale || true
-            echo "--- locale -a ---"
-            locale -a || true
-            echo "--- PrusaSlicer output ---"
-            cat /tmp/prusa-help.txt || true
-            exit 1
+          echo "############################################################"
+          echo "# TESTS A-E: LD_LIBRARY_PATH VARIANTS + LAUNCHER"
+          echo "############################################################"
+          run_sep A-no-LD_LIBRARY_PATH \
+            env APPDIR="$ROOT" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
+                "$BIN" --help
+          A_RC=$RC
+          run_sep B-LD-shared-lib-only \
+            env APPDIR="$ROOT" LD_LIBRARY_PATH="$ROOT/shared/lib" \
+                LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 "$BIN" --help
+          B_RC=$RC
+          run_sep C-LD-lib-only \
+            env APPDIR="$ROOT" LD_LIBRARY_PATH="$ROOT/lib" \
+                LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 "$BIN" --help
+          C_RC=$RC
+          run_sep D-LD-lib-plus-shared-lib \
+            env APPDIR="$ROOT" LD_LIBRARY_PATH="$ROOT/lib:$ROOT/shared/lib" \
+                LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 "$BIN" --help
+          D_RC=$RC
+          if [ -e "$ROOT/AppRun" ]; then
+            run_sep E-AppRun-launcher "$ROOT/AppRun" --help
+            E_RC=$RC
+          else
+            echo "(AppRun absent; test E skipped)"
+            E_RC=-1
           fi
-          head -n 3 /tmp/prusa-help.txt
 
-          sudo ln -sf "$BIN" /usr/local/bin/prusaslicer
-          prusaslicer --help > /dev/null
+          echo "############################################################"
+          echo "# BUNDLED RUNTIME / LIBRARY INSPECTION"
+          echo "############################################################"
+          echo "--- shared/lib: libstdc++ / libc ---"
+          ls -l "$ROOT/shared/lib/"libstdc++* 2>/dev/null || echo "(no libstdc++* in shared/lib)"
+          ls -l "$ROOT/shared/lib/"libc.so* 2>/dev/null || echo "(no libc.so* in shared/lib)"
+          echo "--- \$ROOT/lib contents ---"
+          ls -l "$ROOT/lib" 2>/dev/null | head -60 || echo "(no \$ROOT/lib directory)"
+          echo "--- sharun library-path file(s) ---"
+          for LP in "$ROOT/shared/lib/lib.path" "$ROOT/lib/lib.path"; do
+            if [ -f "$LP" ]; then
+              echo "--- $LP ---"
+              cat "$LP"
+            fi
+          done
+          echo "--- locale-related files inside the extraction ---"
+          find "$ROOT/shared" -maxdepth 3 \( -iname '*locale*' -o -iname 'libstdc++*' -o -iname 'libc.so*' \) 2>/dev/null || true
+          ls -ld "$ROOT/share/locale" "$ROOT/usr/share/locale" \
+                "$ROOT/shared/share/locale" "$ROOT/shared/lib/locale" 2>/dev/null || true
+          find "$ROOT" -maxdepth 5 -name 'locale-archive' 2>/dev/null || true
+          echo "--- sharun helpers ---"
+          for H in "$ROOT/sharun" "$ROOT/lib4bin" "$ROOT/AppRun"; do
+            if [ -e "$H" ]; then ls -l "$H"; file "$H"; else echo "($H absent)"; fi
+          done
+          echo "--- sharun embedded env hints ---"
+          if [ -e "$ROOT/sharun" ]; then
+            strings "$ROOT/sharun" 2>/dev/null \
+              | grep -iE 'LD_LIBRARY_PATH|LOCPATH|APPDIR|locale' | sort -u | head -20 || true
+          fi
+
+          echo "############################################################"
+          echo "# RESULT SUMMARY (diagnostic run — job intentionally fails)"
+          echo "############################################################"
+          echo "A (no LD_LIBRARY_PATH):        exit $A_RC"
+          echo "B (LD=shared/lib):             exit $B_RC"
+          echo "C (LD=lib):                    exit $C_RC"
+          echo "D (LD=lib:shared/lib):         exit $D_RC"
+          echo "E (AppRun launcher):           exit $E_RC"
+          echo "::error::Diagnostic-only run — permanent fix pending root cause"
+          exit 1
 
       # The worker creates its per-job temp dir inside TEMP_DIR (mkdtemp).
       - name: Prepare temp directory
