@@ -283,7 +283,7 @@ export async function runPrusaSlicer(
 
       // Parse the output
       try {
-        const result = await parseOutput(outputFile, stdout);
+        const result = await parseOutput(outputFile, stdout, stderr);
         resolve({
           success: true,
           result,
@@ -320,6 +320,7 @@ export async function runPrusaSlicer(
 async function parseOutput(
   gcodePath: string,
   stdout: string,
+  stderr: string,
 ): Promise<SliceResult> {
   let gcodeContent = "";
   try {
@@ -328,16 +329,35 @@ async function parseOutput(
     // gcode file may not exist if slicing failed
   }
 
-  const combined = `${stdout}\n${gcodeContent}`;
+  const combined = `${stdout}\n${stderr}\n${gcodeContent}`;
 
-  // Parse print time (PrusaSlicer prints "Print time:" in minutes)
-  const printTimeMatch = combined.match(/Print time:\s*(\d+)\s*minutes?/i);
-  const printTimeSeconds = printTimeMatch
-    ? parseInt(printTimeMatch[1], 10) * 60
-    : 0;
+  // Parse print time. PrusaSlicer reports durations either as words
+  // ("2 hours 41 minutes 3 seconds"), as h/m/s ("2h 41m 3s", also used in the
+  // "; estimated printing time (normal mode) = ..." G-code footer), or as a
+  // plain minute count ("Print time: 42 minutes").
+  const hmsWords = combined.match(
+    /(\d+)\s*hours?\s+(\d+)\s*minutes?(?:\s+(\d+)\s*seconds?)?/i,
+  );
+  const hmsCompact = combined.match(/(\d+)\s*h\s*(\d+)\s*m(?:\s*(\d+)\s*s)?/i);
+  const minutesOnly = combined.match(/Print time:\s*(\d+)\s*minutes?/i);
 
-  // Parse filament usage in grams
-  const filamentMatch = combined.match(/Filament used:\s*([\d.]+)\s*g/i);
+  let printTimeSeconds = 0;
+  const duration = hmsWords ?? hmsCompact;
+  if (duration) {
+    printTimeSeconds =
+      parseInt(duration[1], 10) * 3600 +
+      parseInt(duration[2], 10) * 60 +
+      (duration[3] ? parseInt(duration[3], 10) : 0);
+  } else if (minutesOnly) {
+    printTimeSeconds = parseInt(minutesOnly[1], 10) * 60;
+  }
+
+  // Parse filament usage in grams. Covers the console form
+  // ("Filament used: 41.64 g") and the G-code footer forms
+  // ("; filament used = 41.64g" / "; filament used [g] = 41.64").
+  const filamentMatch = combined.match(
+    /filament\s+used\s*(?:\[g\])?\s*[:=]\s*([\d.]+)\s*g?/i,
+  );
   const filamentWeightGrams = filamentMatch
     ? parseFloat(filamentMatch[1])
     : 0;
@@ -364,8 +384,9 @@ async function parseOutput(
   const layerMatch = combined.match(/layer_count\s*=\s*(\d+)/i);
   const layerCount = layerMatch ? parseInt(layerMatch[1], 10) : 0;
 
-  // Detect support usage
-  const supportUsed = combined.toLowerCase().includes("support");
+  // Detect support usage from actual generated extrusion type markers in the
+  // G-code (";TYPE:Support material"), not from configuration settings text.
+  const supportUsed = combined.includes("TYPE:Support material");
 
   // Gcode file size
   let gcodeSizeBytes = 0;
