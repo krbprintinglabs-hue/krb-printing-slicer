@@ -89,6 +89,26 @@ jobs:
             libdbus-1-3 libxkbcommon0 libxcb-xinerama0 libxcb-cursor0 \
             libxcb-keysyms1 libxcb-shape0 || true
 
+      # PrusaSlicer aborts at startup ("locale::facet::_S_create_c_locale
+      # name not valid") unless a UTF-8 locale it can initialize exists;
+      # the runner default is not enough for this build. Generate
+      # en_US.UTF-8 explicitly and export it for every later step.
+      - name: Generate UTF-8 locale
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y locales
+          sudo locale-gen en_US.UTF-8
+          echo "--- available locales ---"
+          locale -a || true
+          if ! locale -a 2>/dev/null | grep -qi '^en_US\.utf8$'; then
+            echo "::error::en_US.utf8 not present after locale-gen"
+            exit 1
+          fi
+          {
+            echo "LANG=en_US.UTF-8"
+            echo "LC_ALL=en_US.UTF-8"
+          } >> "$GITHUB_ENV"
+
       - name: Download and extract PrusaSlicer
         if: steps.prusaslicer_cache.outputs.cache-hit != 'true'
         env:
@@ -123,35 +143,31 @@ jobs:
             exit 1
           fi
 
-          # PrusaSlicer aborts on default runner locales with
-          # "locale::facet::_S_create_c_locale name not valid"; C.UTF-8 is
-          # always available on GitHub Ubuntu runners (glibc >= 2.35), so no
-          # extra packages are installed here.
-          if ! locale -a 2>/dev/null | grep -qi '^C\.utf8$'; then
-            echo "::warning::locale -a does not list C.utf8; relying on glibc built-in C.UTF-8"
-          fi
-
           # Persist the AppImage runtime environment for all later steps
           # (the worker calls SLICER_PATH=prusaslicer in its own shell).
+          # LANG/LC_ALL are persisted by the "Generate UTF-8 locale" step.
           {
             echo "APPDIR=$ROOT"
             echo "LD_LIBRARY_PATH=$ROOT/lib:$ROOT/shared/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-            echo "LANG=C.UTF-8"
-            echo "LC_ALL=C.UTF-8"
           } >> "$GITHUB_ENV"
 
           echo "--- validating real binary: $BIN ---"
           set +e
           APPDIR="$ROOT" \
           LD_LIBRARY_PATH="$ROOT/lib:$ROOT/shared/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-          LANG=C.UTF-8 \
-          LC_ALL=C.UTF-8 \
+          LANG=en_US.UTF-8 \
+          LC_ALL=en_US.UTF-8 \
             "$BIN" --help > /tmp/prusa-help.txt 2>&1
           RC=$?
           set -e
           if [ "$RC" -ne 0 ]; then
             echo "::error::PrusaSlicer --help validation failed (exit code $RC)"
-            tail -n 40 /tmp/prusa-help.txt || true
+            echo "--- locale ---"
+            locale || true
+            echo "--- locale -a ---"
+            locale -a || true
+            echo "--- PrusaSlicer output ---"
+            cat /tmp/prusa-help.txt || true
             exit 1
           fi
           head -n 3 /tmp/prusa-help.txt
