@@ -101,143 +101,63 @@ jobs:
           (cd "$HOME/prusaslicer-appimage" && "/tmp/prusaslicer.AppImage" --appimage-extract > /dev/null)
           rm -f /tmp/prusaslicer.AppImage
 
-      # TEMPORARY DIAGNOSTICS (to be reverted once fixed). Layout is known:
-      # squashfs-root/bin/prusa-slicer (~270 KB) and squashfs-root/shared/bin/
-      # prusa-slicer (~99 MB); both fail --version today. For BOTH candidates
-      # this step prints ls -lh / file / ELF interpreter / ldd (with an
-      # explicit MISSING LIBRARIES callout), runs <candidate> --version,
-      # AppRun --version and APPDIR / LD_LIBRARY_PATH variants — always with
-      # stdout and stderr captured separately plus exit codes — and prints
-      # the file types of AppRun/sharun/lib4bin. Only non-secret environment
-      # variables are printed. Selection logic is unchanged: a candidate must
-      # really pass --version; otherwise the job fails after printing all
-      # diagnostics.
+      # The community GN AppImage uses a Sharun layout: bin/prusa-slicer is
+      # only a static launcher stub — the real CLI lives at
+      # shared/bin/prusa-slicer and needs its bundled libraries (APPDIR +
+      # LD_LIBRARY_PATH) plus a valid UTF-8 locale at runtime. PrusaSlicer
+      # 2.9.6 has no --version option, so validation uses --help. The runtime
+      # environment is persisted via GITHUB_ENV because each workflow step
+      # runs in a fresh shell and the worker invokes `prusaslicer` later.
       - name: Expose PrusaSlicer on PATH
         run: |
           ROOT="$HOME/prusaslicer-appimage/squashfs-root"
+          BIN="$ROOT/shared/bin/prusa-slicer"
           if [ ! -d "$ROOT" ]; then
             echo "::error::Extraction directory not found: $ROOT"
             ls -la "$HOME/prusaslicer-appimage" || true
             exit 1
           fi
-
-          run_sep() {
-            local LABEL="$1"; shift
-            echo "--- RUN [$LABEL]: $* ---"
-            set +e
-            "$@" > /tmp/diag-out.txt 2> /tmp/diag-err.txt
-            RC=$?
-            set -e
-            echo "exit code: $RC"
-            echo "----- stdout -----"
-            cat /tmp/diag-out.txt
-            echo "----- stderr -----"
-            cat /tmp/diag-err.txt
-            echo "----- end [$LABEL] -----"
-          }
-
-          BIN_CAND="$ROOT/bin/prusa-slicer"
-          SHARED_CAND="$ROOT/shared/bin/prusa-slicer"
-
-          echo "############################################################"
-          echo "# 1+2. CANDIDATES: existence + file/ls/readelf/ldd"
-          echo "############################################################"
-          for CAND in "$BIN_CAND" "$SHARED_CAND"; do
-            echo "============================================================"
-            echo "CANDIDATE: $CAND"
-            if [ ! -e "$CAND" ]; then
-              echo "RESULT: missing"
-              continue
-            fi
-            ls -lh "$CAND"
-            file "$CAND"
-            echo "--- ELF interpreter ---"
-            readelf -l "$CAND" 2>/dev/null | grep -i 'interpreter' || true
-            echo "--- ldd ---"
-            LDD_OUT="$(ldd "$CAND" 2>&1)" || true
-            printf '%s\n' "$LDD_OUT"
-            if printf '%s' "$LDD_OUT" | grep -q 'not found'; then
-              echo ">>> MISSING LIBRARIES DETECTED for $CAND:"
-              printf '%s\n' "$LDD_OUT" | grep 'not found'
-            else
-              echo "(no missing libraries reported by ldd)"
-            fi
-          done
-
-          echo "############################################################"
-          echo "# 3. DIRECT RUNS: <candidate> --version (stdout/stderr split)"
-          echo "############################################################"
-          if [ -e "$BIN_CAND" ]; then
-            run_sep bin-prusa-slicer "$BIN_CAND" --version
-          fi
-          if [ -e "$SHARED_CAND" ]; then
-            run_sep shared-bin-prusa-slicer "$SHARED_CAND" --version
-          fi
-
-          echo "############################################################"
-          echo "# 4. APPRUN LAUNCHER"
-          echo "############################################################"
-          APPRUN="$ROOT/AppRun"
-          if [ -e "$APPRUN" ]; then
-            run_sep AppRun "$APPRUN" --version
-          else
-            echo "(AppRun absent)"
-          fi
-
-          echo "############################################################"
-          echo "# 5. RUNS WITH APPIMAGE ENVIRONMENT (additional probes)"
-          echo "############################################################"
-          if [ -e "$SHARED_CAND" ]; then
-            run_sep shared-with-APPDIR env APPDIR="$ROOT" "$SHARED_CAND" --version
-          fi
-          if [ -e "$BIN_CAND" ]; then
-            run_sep bin-with-APPDIR env APPDIR="$ROOT" "$BIN_CAND" --version
-          fi
-          if [ -e "$SHARED_CAND" ]; then
-            run_sep shared-with-APPDIR-and-LD_LIBRARY_PATH env APPDIR="$ROOT" LD_LIBRARY_PATH="$ROOT/lib:$ROOT/shared/lib" "$SHARED_CAND" --version
-          fi
-
-          echo "############################################################"
-          echo "# 6. LAUNCHER/RUNTIME HELPERS"
-          echo "############################################################"
-          for H in "$ROOT/sharun" "$ROOT/lib4bin" "$ROOT/AppRun"; do
-            echo "--- $H ---"
-            if [ -e "$H" ]; then
-              ls -l "$H"
-              file "$H"
-            else
-              echo "(absent)"
-            fi
-          done
-
-          echo "############################################################"
-          echo "# 7. ENVIRONMENT VARIABLES (non-secret only)"
-          echo "############################################################"
-          for V in APPDIR PATH LD_LIBRARY_PATH XDG_DATA_DIRS XDG_CONFIG_HOME HOME; do
-            echo "$V=${!V:-<empty or unset>}"
-          done
-
-          echo "############################################################"
-          echo "# SELECTION (unchanged logic: must pass --version)"
-          echo "############################################################"
-          BIN=""
-          while IFS= read -r CANDIDATE; do
-            if [ -x "$CANDIDATE" ] && "$CANDIDATE" --version > /tmp/prusa-version.txt 2>&1; then
-              BIN="$CANDIDATE"
-              break
-            fi
-            echo ">>> candidate failed verification: $CANDIDATE"
-          done < <(find "$ROOT" \( -type f -o -type l \) -name 'prusa-slicer*' 2>/dev/null | sort)
-
-          if [ -z "$BIN" ]; then
-            echo "::error::No working PrusaSlicer executable found under $ROOT (full diagnostics above)"
+          if [ ! -x "$BIN" ]; then
+            echo "::error::PrusaSlicer executable not found or not executable: $BIN"
+            find "$ROOT" \( -type f -o -type l \) -name 'prusa-slicer*' -exec ls -ld {} + 2>/dev/null || true
             exit 1
           fi
 
-          echo "Discovered PrusaSlicer binary: $BIN"
-          cat /tmp/prusa-version.txt
+          # PrusaSlicer aborts on default runner locales with
+          # "locale::facet::_S_create_c_locale name not valid"; C.UTF-8 is
+          # always available on GitHub Ubuntu runners (glibc >= 2.35), so no
+          # extra packages are installed here.
+          if ! locale -a 2>/dev/null | grep -qi '^C\.utf8$'; then
+            echo "::warning::locale -a does not list C.utf8; relying on glibc built-in C.UTF-8"
+          fi
+
+          # Persist the AppImage runtime environment for all later steps
+          # (the worker calls SLICER_PATH=prusaslicer in its own shell).
+          {
+            echo "APPDIR=$ROOT"
+            echo "LD_LIBRARY_PATH=$ROOT/lib:$ROOT/shared/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            echo "LANG=C.UTF-8"
+            echo "LC_ALL=C.UTF-8"
+          } >> "$GITHUB_ENV"
+
+          echo "--- validating real binary: $BIN ---"
+          set +e
+          APPDIR="$ROOT" \
+          LD_LIBRARY_PATH="$ROOT/lib:$ROOT/shared/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+          LANG=C.UTF-8 \
+          LC_ALL=C.UTF-8 \
+            "$BIN" --help > /tmp/prusa-help.txt 2>&1
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::PrusaSlicer --help validation failed (exit code $RC)"
+            tail -n 40 /tmp/prusa-help.txt || true
+            exit 1
+          fi
+          head -n 3 /tmp/prusa-help.txt
+
           sudo ln -sf "$BIN" /usr/local/bin/prusaslicer
-          prusaslicer --version
+          prusaslicer --help > /dev/null
 
       # The worker creates its per-job temp dir inside TEMP_DIR (mkdtemp).
       - name: Prepare temp directory
