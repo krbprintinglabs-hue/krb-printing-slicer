@@ -151,8 +151,9 @@ function buildArgs(quality: string, material: string): string[] {
     "--first-layer-temperature", String(m.firstLayerTemp),
     "--first-layer-bed-temperature", String(m.firstLayerBedTemp),
 
-    "--print-speed", String(m.printSpeed),
-    "--first-layer-speed", `${m.firstLayerSpeed}mm/s`,
+    "--perimeter-speed", String(m.printSpeed),
+    "--infill-speed", String(m.printSpeed),
+    "--first-layer-speed", String(m.firstLayerSpeed),
 
     "--retract-length", String(m.retractLength),
     "--retract-speed", String(m.retractSpeed),
@@ -162,7 +163,6 @@ function buildArgs(quality: string, material: string): string[] {
     "--max-fan-speed", String(m.fanSpeed),
 
     "--export-gcode",
-    "--no-draft",
     "--skirts", "1",
     "--brim-width", "0",
   ].filter(Boolean);
