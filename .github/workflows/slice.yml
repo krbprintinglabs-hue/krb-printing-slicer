@@ -127,7 +127,8 @@ jobs:
       # forcing LD_LIBRARY_PATH breaks C++ locale init). The proven entrypoint
       # is the AppRun Sharun launcher, which sets up its own runtime. It is
       # validated with --help (PrusaSlicer 2.9.6 has no --version) and then
-      # exposed as `prusaslicer` for the worker (SLICER_PATH=prusaslicer).
+      # exposed as `prusaslicer` for the worker
+      # (SLICER_PATH=/usr/local/bin/prusaslicer).
       # LANG/LC_ALL=en_US.UTF-8 are provided by the "Generate UTF-8 locale"
       # step; no library paths are forced manually.
       - name: Expose PrusaSlicer on PATH
@@ -183,7 +184,7 @@ jobs:
       - name: Run worker
         env:
           JOB_ID: ${{ inputs.jobId }}
-          SLICER_PATH: prusaslicer
+          SLICER_PATH: /usr/local/bin/prusaslicer
           TEMP_DIR: /tmp/krb-slicer
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
           FIREBASE_SERVICE_ACCOUNT_PATH: ${{ runner.temp }}/firebase-service-account.json

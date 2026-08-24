@@ -179,7 +179,9 @@ export async function checkPrusaSlicer(): Promise<boolean> {
     const { promisify } = await import("node:util");
     const exec = promisify(execFile);
 
-    await exec(config.slicerPath, ["--version"], { timeout: 10000 });
+    // PrusaSlicer 2.9.6 has no --version option (it exits non-zero with
+    // "Unknown option --version"), so availability is checked via --help.
+    await exec(config.slicerPath, ["--help"], { timeout: 10000 });
     return true;
   } catch {
     return false;
