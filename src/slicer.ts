@@ -158,7 +158,7 @@ function buildArgs(quality: string, material: string): string[] {
     "--retract-length", String(m.retractLength),
     "--retract-speed", String(m.retractSpeed),
 
-    "--fan-always-on", m.fanSpeed > 0 ? "1" : "0",
+    m.fanSpeed > 0 ? "--fan-always-on" : "--no-fan-always-on",
     "--min-fan-speed", String(m.fanSpeed),
     "--max-fan-speed", String(m.fanSpeed),
 
