@@ -101,9 +101,17 @@ jobs:
           (cd "$HOME/prusaslicer-appimage" && "/tmp/prusaslicer.AppImage" --appimage-extract > /dev/null)
           rm -f /tmp/prusaslicer.AppImage
 
-      # The inner layout of the AppImage varies between builds, so instead of
-      # hard-coding squashfs-root/usr/bin/prusa-slicer the CLI binary is
-      # discovered on the runner and verified with --version before use.
+      # TEMPORARY DIAGNOSTICS (to be reverted once fixed). Layout is known:
+      # squashfs-root/bin/prusa-slicer (~270 KB) and squashfs-root/shared/bin/
+      # prusa-slicer (~99 MB); both fail --version today. For BOTH candidates
+      # this step prints ls -lh / file / ELF interpreter / ldd (with an
+      # explicit MISSING LIBRARIES callout), runs <candidate> --version,
+      # AppRun --version and APPDIR / LD_LIBRARY_PATH variants — always with
+      # stdout and stderr captured separately plus exit codes — and prints
+      # the file types of AppRun/sharun/lib4bin. Only non-secret environment
+      # variables are printed. Selection logic is unchanged: a candidate must
+      # really pass --version; otherwise the job fails after printing all
+      # diagnostics.
       - name: Expose PrusaSlicer on PATH
         run: |
           ROOT="$HOME/prusaslicer-appimage/squashfs-root"
@@ -113,23 +121,116 @@ jobs:
             exit 1
           fi
 
+          run_sep() {
+            local LABEL="$1"; shift
+            echo "--- RUN [$LABEL]: $* ---"
+            set +e
+            "$@" > /tmp/diag-out.txt 2> /tmp/diag-err.txt
+            RC=$?
+            set -e
+            echo "exit code: $RC"
+            echo "----- stdout -----"
+            cat /tmp/diag-out.txt
+            echo "----- stderr -----"
+            cat /tmp/diag-err.txt
+            echo "----- end [$LABEL] -----"
+          }
+
+          BIN_CAND="$ROOT/bin/prusa-slicer"
+          SHARED_CAND="$ROOT/shared/bin/prusa-slicer"
+
+          echo "############################################################"
+          echo "# 1+2. CANDIDATES: existence + file/ls/readelf/ldd"
+          echo "############################################################"
+          for CAND in "$BIN_CAND" "$SHARED_CAND"; do
+            echo "============================================================"
+            echo "CANDIDATE: $CAND"
+            if [ ! -e "$CAND" ]; then
+              echo "RESULT: missing"
+              continue
+            fi
+            ls -lh "$CAND"
+            file "$CAND"
+            echo "--- ELF interpreter ---"
+            readelf -l "$CAND" 2>/dev/null | grep -i 'interpreter' || true
+            echo "--- ldd ---"
+            LDD_OUT="$(ldd "$CAND" 2>&1)" || true
+            printf '%s\n' "$LDD_OUT"
+            if printf '%s' "$LDD_OUT" | grep -q 'not found'; then
+              echo ">>> MISSING LIBRARIES DETECTED for $CAND:"
+              printf '%s\n' "$LDD_OUT" | grep 'not found'
+            else
+              echo "(no missing libraries reported by ldd)"
+            fi
+          done
+
+          echo "############################################################"
+          echo "# 3. DIRECT RUNS: <candidate> --version (stdout/stderr split)"
+          echo "############################################################"
+          if [ -e "$BIN_CAND" ]; then
+            run_sep bin-prusa-slicer "$BIN_CAND" --version
+          fi
+          if [ -e "$SHARED_CAND" ]; then
+            run_sep shared-bin-prusa-slicer "$SHARED_CAND" --version
+          fi
+
+          echo "############################################################"
+          echo "# 4. APPRUN LAUNCHER"
+          echo "############################################################"
+          APPRUN="$ROOT/AppRun"
+          if [ -e "$APPRUN" ]; then
+            run_sep AppRun "$APPRUN" --version
+          else
+            echo "(AppRun absent)"
+          fi
+
+          echo "############################################################"
+          echo "# 5. RUNS WITH APPIMAGE ENVIRONMENT (additional probes)"
+          echo "############################################################"
+          if [ -e "$SHARED_CAND" ]; then
+            run_sep shared-with-APPDIR env APPDIR="$ROOT" "$SHARED_CAND" --version
+          fi
+          if [ -e "$BIN_CAND" ]; then
+            run_sep bin-with-APPDIR env APPDIR="$ROOT" "$BIN_CAND" --version
+          fi
+          if [ -e "$SHARED_CAND" ]; then
+            run_sep shared-with-APPDIR-and-LD_LIBRARY_PATH env APPDIR="$ROOT" LD_LIBRARY_PATH="$ROOT/lib:$ROOT/shared/lib" "$SHARED_CAND" --version
+          fi
+
+          echo "############################################################"
+          echo "# 6. LAUNCHER/RUNTIME HELPERS"
+          echo "############################################################"
+          for H in "$ROOT/sharun" "$ROOT/lib4bin" "$ROOT/AppRun"; do
+            echo "--- $H ---"
+            if [ -e "$H" ]; then
+              ls -l "$H"
+              file "$H"
+            else
+              echo "(absent)"
+            fi
+          done
+
+          echo "############################################################"
+          echo "# 7. ENVIRONMENT VARIABLES (non-secret only)"
+          echo "############################################################"
+          for V in APPDIR PATH LD_LIBRARY_PATH XDG_DATA_DIRS XDG_CONFIG_HOME HOME; do
+            echo "$V=${!V:-<empty or unset>}"
+          done
+
+          echo "############################################################"
+          echo "# SELECTION (unchanged logic: must pass --version)"
+          echo "############################################################"
           BIN=""
           while IFS= read -r CANDIDATE; do
             if [ -x "$CANDIDATE" ] && "$CANDIDATE" --version > /tmp/prusa-version.txt 2>&1; then
               BIN="$CANDIDATE"
               break
             fi
-            echo "Skipping candidate (not executable or --version failed): $CANDIDATE"
+            echo ">>> candidate failed verification: $CANDIDATE"
           done < <(find "$ROOT" \( -type f -o -type l \) -name 'prusa-slicer*' 2>/dev/null | sort)
 
           if [ -z "$BIN" ]; then
-            echo "::error::No working PrusaSlicer executable found under $ROOT"
-            echo "--- top-level extraction layout ---"
-            ls -la "$ROOT"
-            echo "--- prusa-slicer* candidates ---"
-            find "$ROOT" \( -type f -o -type l \) -name 'prusa-slicer*' -exec ls -ld {} + 2>/dev/null || true
-            echo "--- extracted tree (first 200 entries, depth <= 4) ---"
-            find "$ROOT" -maxdepth 4 | sort | head -200
+            echo "::error::No working PrusaSlicer executable found under $ROOT (full diagnostics above)"
             exit 1
           fi
 
