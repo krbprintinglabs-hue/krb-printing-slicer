@@ -75,7 +75,7 @@ console.log(`== ${request.material}/${request.quality}${request.layerHeight ? ` 
 console.log(`  prediction=${pred}s (${(Number(pred) / 60).toFixed(1)}min) weight=${wgt}g supportUsed=${sup} gcodeBytes=${fs.statSync(gcode).size}`);
 
 failures += assertCfg("layer_height", String(request.layerHeight ?? resolved.process.layer_height)) ? 0 : 1;
-failures += assertCfg("sparse_infill_density", String(resolved.process.sparse_infill_density).replace("%", "\\%")) ? 0 : 1;
+failures += assertCfg("sparse_infill_density", String(resolved.process.sparse_infill_density)) ? 0 : 1;
 failures += assertCfg("enable_support", request.supports === false ? "0" : "1") ? 0 : 1;
 if (resolved.filament.nozzle_temperature) {
   failures += assertCfg("nozzle_temperature", resolved.filament.nozzle_temperature[0]) ? 0 : 1;
