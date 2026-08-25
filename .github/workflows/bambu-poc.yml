@@ -135,12 +135,13 @@ jobs:
             echo "run $i: prediction=${T[$i]}s weight=${W[$i]}g supportEntries=${S[$i]}"
           done
           DT=$(( T[1] > T[2] ? T[1]-T[2] : T[2]-T[1] ))
-          DW=$(node -e "console.log(Math.abs(${$W[1]}-${W[2]}).toFixed(2))")
+          DW=$(awk -v a="${W[1]}" -v b="${W[2]}" 'BEGIN{d=a-b; if(d<0)d=-d; printf "%.2f", d}')
           echo "deltas: time=${DT}s weight=${DW}g"
           if [ $DT -gt 120 ]; then echo "::error::time not repeatable (${DT}s apart)"; exit 1; fi
-          node -e "process.exit($DW > 1.0 ? 1 : 0)" || { echo "::error::weight not repeatable (${DW}g apart)"; exit 1; }
+          awk -v d="$DW" 'BEGIN{ if (d+0 > 1.0) exit 1 }' || { echo "::error::weight not repeatable (${DW}g apart)"; exit 1; }
 
       - name: POC 5 — multi-STL matrix with full A1 config
+        if: always()
         run: |
           set +e
           for F in chibi-roger-federer-elegant-backhand-tennis krb-cube-20mm krb-l-bracket; do
@@ -166,6 +167,7 @@ jobs:
           done
 
       - name: POC 6 — failure battery (must fail cleanly, never fake data)
+        if: always()
         run: |
           set +e
           printf 'this is definitely not a valid binary STL payload\n' > bad-garbage.stl
