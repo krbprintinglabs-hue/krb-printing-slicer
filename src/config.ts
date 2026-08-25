@@ -6,8 +6,8 @@
  */
 
 export const config = {
-  /** Slicing backend: "prusa" (production default) or "bambu" (migration branch). */
-  slicerBackend: (process.env.SLICER_BACKEND ?? "prusa").toLowerCase(),
+  /** Slicing backend: "bambu" (default); "prusa" = emergency fallback. */
+  slicerBackend: (process.env.SLICER_BACKEND ?? "bambu").toLowerCase(),
 
   /** Path to PrusaSlicer CLI binary (prusa backend) or Bambu CLI (bambu backend). */
   slicerPath: process.env.SLICER_PATH ?? "prusa-slicer",

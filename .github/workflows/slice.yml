@@ -31,10 +31,10 @@ on:
         required: true
         type: string
       backend:
-        description: "Slicing backend (prusa = production default)"
+        description: "Slicing backend (bambu = default; prusa = emergency fallback)"
         required: false
         type: choice
-        default: prusa
+        default: bambu
         options:
           - prusa
           - bambu
@@ -78,7 +78,7 @@ jobs:
             echo "::error::jobId contains unsupported characters"
             exit 1
           fi
-          BACKEND="${{ inputs.backend || 'prusa' }}"
+          BACKEND="${{ inputs.backend || 'bambu' }}"
           if [ "$BACKEND" != "prusa" ] && [ "$BACKEND" != "bambu" ]; then
             echo "::error::invalid backend '$BACKEND'"
             exit 1
@@ -253,7 +253,7 @@ jobs:
       - name: Run worker
         env:
           JOB_ID: ${{ inputs.jobId }}
-          SLICER_BACKEND: ${{ inputs.backend || 'prusa' }}
+          SLICER_BACKEND: ${{ inputs.backend || 'bambu' }}
           SLICER_PATH: ${{ (inputs.backend == 'bambu') && '/usr/local/bin/bambu-studio' || '/usr/local/bin/prusaslicer' }}
           TEMP_DIR: /tmp/krb-slicer
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
