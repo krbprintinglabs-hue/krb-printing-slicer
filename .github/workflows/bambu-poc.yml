@@ -144,19 +144,21 @@ jobs:
       - name: POC 4 — repeat-run stability (3 identical slices of the STL)
         if: always()
         run: |
+          set +e
+          OVERALL=0
           for i in 1 2 3; do
-            bambu-studio \
-              --slice 0 \
-              --load-settings "bs-profiles/machine.json;bs-profiles/process.json" \
-              --load-filaments "bs-profiles/filament.json" \
-              --export-3mf "poc-repeat-$i.gcode.3mf" \
-              test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl \
-              > "poc-repeat-$i.log" 2>&1
-            echo "--- run $i ---"
-            mkdir -p "r$i" && (cd "r$i" && unzip -o "../poc-repeat-$i.gcode.3mf" > /dev/null)
-            G=$(find "r$i" -name '*.gcode' | head -1)
-            grep -E '^; (total filament used \[g\]|estimated printing time \(normal mode\))' "$G"
+            bambu-studio --slice 0 --load-settings "bs-profiles/machine.json;bs-profiles/process.json" --load-filaments "bs-profiles/filament.json" --export-3mf "poc-repeat-$i.gcode.3mf" test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl > "poc-repeat-$i.log" 2>&1
+            RC=$?
+            echo "--- run $i (slice exit $RC) ---"
+            if [ $RC -ne 0 ]; then OVERALL=1; tail -8 "poc-repeat-$i.log"; continue; fi
+            rm -rf "r$i"; mkdir -p "r$i"
+            (cd "r$i" && unzip -o "../poc-repeat-$i.gcode.3mf" > /dev/null)
+            PRED=$(grep -o 'key="prediction" value="[0-9]*"' "r$i/Metadata/slice_info.config" | grep -o '[0-9]*')
+            WGT=$(grep -o 'key="weight" value="[0-9.]*"' "r$i/Metadata/slice_info.config" | grep -o '[0-9.]*')
+            echo "run $i: prediction=${PRED}s weight=${WGT}g"
           done
+          echo "repeat_overall=$OVERALL"
+          exit $OVERALL
 
       - name: Upload all POC artifacts and logs
         if: always()
