@@ -1,12 +1,13 @@
 /**
  * Bambu Studio slicing backend — MIGRATION BRANCH IMPLEMENTATION.
  *
- * Alternative backend selectable via SLICER_BACKEND=bambu. Production default
- * remains PrusaSlicer (src/slicer.ts, checkpoint prusa-a1-known-good).
+ * Alternative backend selectable via SLICER_BACKEND=bambu (now the default on
+ * this branch). Production rollback: SLICER_BACKEND=prusa or checkpoint
+ * prusa-a1-known-good.
  *
- * Uses pinned Bambu Studio v02.08.02.61 CLI with the FULL resolved A1/PLA/
- * Standard configuration extracted from the known-good reference project
- * (profiles/bambu/*.json). Raw resource-profile fragments are NOT used.
+ * Uses pinned Bambu Studio v02.08.02.61 CLI with configurations composed by
+ * src/bambu-config.ts from official pinned profiles
+ * (profiles/bambu/*). Raw resource-profile fragments are NOT used.
  *
  * Output: Bambu writes a *.gcode.3mf archive; slice_info.config carries
  * prediction (s) and weight (g); the per-filament entry carries the proven
@@ -15,21 +16,18 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { config } from "./config.js";
 import type { SliceExecution } from "./slicer.js";
 import { isCompleteBambuResult, parseBambuSliceInfo } from "./bambu-poc-result.js";
+import { resolveBambuConfig, type BambuSliceRequest } from "./bambu-config.js";
 import { extractFileFromZip, getUncompressedSize } from "./bambu-zip.js";
 
 const GCODE_3MF_NAME = "Metadata/plate_1.gcode";
 const SLICE_INFO_NAME = "Metadata/slice_info.config";
 
-function bambuConfigDir(): string {
-  return process.env.BAMBU_CONFIG_DIR ?? join("profiles", "bambu");
-}
-
-/** Check Bambu CLI availability at the configured path. Same --help convention as PrusaSlicer (2.9.6 has no --version; Bambu does but --help also validates resources). */
+/** Check Bambu CLI availability at the configured path. */
 export async function checkBambu(): Promise<boolean> {
   try {
     const { execFile } = await import("node:child_process");
@@ -43,42 +41,55 @@ export async function checkBambu(): Promise<boolean> {
 }
 
 /**
- * Slice a raw STL with the full resolved KRB A1 configuration.
- * Only standard/pla presets are covered by the current validated configuration.
+ * Slice with the resolved KRB A1 configuration for this request
+ * (material + quality + optional advanced overrides).
  */
 export async function runBambuSlicer(
   inputFile: string,
   outputDir: string,
-  quality: string,
-  material: string,
+  request: BambuSliceRequest,
 ): Promise<SliceExecution> {
-  if (quality !== "standard" || material !== "pla") {
+  const out3mf = join(outputDir, "output.gcode.3mf");
+  const cfgDir = join(outputDir, "bambu-cfg");
+  const machineCfgPath = join(cfgDir, "machine.json");
+  const processCfgPath = join(cfgDir, "process.json");
+  const filamentCfgPath = join(cfgDir, "filament.json");
+
+  let machineCfg: Record<string, unknown>;
+  try {
+    const resolved = await resolveBambuConfig(request);
+    // Materialize typed config files for the CLI loader.
+    await mkdir(cfgDir, { recursive: true });
+    machineCfg = resolved.machine;
+    await Promise.all([
+      writeFile(machineCfgPath, JSON.stringify(resolved.machine)),
+      writeFile(processCfgPath, JSON.stringify(resolved.process)),
+      writeFile(filamentCfgPath, JSON.stringify(resolved.filament)),
+    ]);
+  } catch (err) {
     return {
       success: false,
       result: null,
-      error: `Bambu backend currently supports only quality=standard material=pla (got ${quality}/${material})`,
+      error: `Invalid slicing configuration: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
       stdout: "",
       stderr: "",
     };
   }
 
-  const cfgDir = bambuConfigDir();
-  const machineCfg = join(cfgDir, "krb-a1-machine.json");
-  const processCfg = join(cfgDir, "krb-a1-process.json");
-  const filamentCfg = join(cfgDir, "krb-a1-filament.json");
-  const out3mf = join(outputDir, "output.gcode.3mf");
-
   const args = [
     "--slice",
     "0",
     "--load-settings",
-    `${machineCfg};${processCfg}`,
+    `${machineCfgPath};${processCfgPath}`,
     "--load-filaments",
-    filamentCfg,
+    filamentCfgPath,
     "--export-3mf",
     out3mf,
     inputFile,
   ];
+  void machineCfg;
 
   return new Promise((resolve) => {
     let stderr = "";

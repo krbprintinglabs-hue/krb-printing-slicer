@@ -188,6 +188,23 @@ jobs:
           echo "failure-battery unexpected-successes=$FAILURES"
           exit $FAILURES
 
+      - name: POC 5b — material/quality/advanced combo matrix (values verified in G-code)
+        run: |
+          set +e
+          FAILS=0
+          run_combo () {
+            node scripts/poc-combo-slice.mjs "$1" test-fixtures/krb-cube-20mm.stl /usr/local/bin/bambu-studio "combo-$2"
+            [ $? -ne 0 ] && FAILS=$((FAILS+1))
+          }
+          run_combo '{"material":"pla","quality":"fast"}' pla-fast
+          run_combo '{"material":"petg","quality":"standard"}' petg-std
+          run_combo '{"material":"abs","quality":"standard"}' abs-std
+          run_combo '{"material":"pla","quality":"standard","layerHeight":0.12}' pla-std-lh012
+          run_combo '{"material":"pla","quality":"standard","infill":60}' pla-std-infill60
+          run_combo '{"material":"pla","quality":"standard","supports":false}' pla-std-nosup
+          echo "combo_failures=$FAILS"
+          exit $FAILS
+
       - name: Upload all POC artifacts and logs
         if: always()
         uses: actions/upload-artifact@v4

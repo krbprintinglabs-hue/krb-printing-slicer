@@ -77,22 +77,27 @@ async function processJob(jobId: string): Promise<void> {
       backend: config.slicerBackend,
       quality: (currentJob as SliceJob).quality,
       material: (currentJob as SliceJob).material,
+      layerHeight: (currentJob as SliceJob).layerHeight ?? null,
+      infill: (currentJob as SliceJob).infill ?? null,
+      supports: (currentJob as SliceJob).supports ?? null,
     });
 
-    // Backend selection: prusa = production default; bambu = migration branch.
+    // Backend selection: bambu = default; prusa = emergency fallback.
+    const request = {
+      material: (currentJob as SliceJob).material,
+      quality: (currentJob as SliceJob).quality,
+      layerHeight: (currentJob as SliceJob).layerHeight,
+      infill: (currentJob as SliceJob).infill,
+      supports: (currentJob as SliceJob).supports,
+    };
     const execution =
       config.slicerBackend === "bambu"
-        ? await runBambuSlicer(
-            inputFilePath,
-            dir,
-            (currentJob as SliceJob).quality,
-            (currentJob as SliceJob).material,
-          )
+        ? await runBambuSlicer(inputFilePath, dir, request)
         : await runPrusaSlicer(
             inputFilePath,
             dir,
-            (currentJob as SliceJob).quality,
-            (currentJob as SliceJob).material,
+            request.quality,
+            request.material,
           );
 
     if (!execution.success || !execution.result) {
