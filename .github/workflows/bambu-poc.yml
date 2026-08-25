@@ -188,8 +188,6 @@ jobs:
             echo "--- support marker count ---"; grep -c ';TYPE:Support material' "$G" || true
           fi
 
-      - name: Upload all POC artifacts and logs
-
       - name: Support material measurement (;TYPE markers)
         if: always()
         run: |
