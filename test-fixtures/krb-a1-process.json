@@ -1151,5 +1151,8 @@
         "Auto Lift"
     ],
     "from": "user",
-    "type": "process"
+    "type": "process",
+    "compatible_printers": [
+        "Bambu Lab A1 0.4 nozzle"
+    ]
 }

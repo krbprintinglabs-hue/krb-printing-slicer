@@ -725,7 +725,7 @@
     "mmu_segmented_region_interlocking_depth": "0",
     "mmu_segmented_region_max_width": "0",
     "monotonic_travel_into_wall": "0%",
-    "name": "project_settings",
+    "name": "Bambu Lab A1 0.4 nozzle",
     "no_slow_down_for_cooling_on_outwalls": [
         "0"
     ],
