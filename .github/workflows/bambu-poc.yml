@@ -205,15 +205,7 @@ jobs:
             [ -z "$GCODE$G" ] && continue
             [ -z "$G" ] && continue
             echo "--- support breakdown for $G ---"
-            node -e "
-const fs=require('fs');
-const lines=fs.readFileSync(process.argv[1],'utf8').split('\n');
-let type='(none)',lastE=null;const vol={};const AREA=Math.PI*(1.75/2)**2;
-for(const l of lines){const m=l.match(/^;TYPE:(.+)$/);if(m){type=m[1].trim();continue;}
-const e=l.match(/^G1 .* E([-0-9.]+)/);if(e){const v=parseFloat(e[1]);if(lastE!==null&&v>lastE){vol[type]=(vol[type]||0)+(v-lastE);}lastE=v;}}
-let sup=0,tot=0;for(const[k,len]of Object.entries(vol)){const c=len*AREA/1000;tot+=c;if(/Support/.test(k))sup+=c;}
-console.log('support cm3:',sup.toFixed(2),'total cm3:',tot.toFixed(2),'grams@1.24:',(tot*1.24).toFixed(2));
-" "$G"
+            node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').split('\n');let type='(none)',lastE=null;const vol={};const AREA=Math.PI*(1.75/2)**2;for(const l of lines){const m=l.match(/^;TYPE:(.+)$/);if(m){type=m[1].trim();continue;}const e=l.match(/^G1 .* E([-0-9.]+)/);if(e){const v=parseFloat(e[1]);if(lastE!==null&&v>lastE){vol[type]=(vol[type]||0)+(v-lastE);}lastE=v;}}let sup=0,tot=0;for(const[k,len]of Object.entries(vol)){const c=len*AREA/1000;tot+=c;if(/Support/.test(k))sup+=c;}console.log('support cm3:',sup.toFixed(2),'total cm3:',tot.toFixed(2),'grams@1.24:',(tot*1.24).toFixed(2));" "$G"
           done
 
       - name: Upload all POC artifacts and logs
