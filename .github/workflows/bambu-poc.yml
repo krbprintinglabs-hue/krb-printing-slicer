@@ -208,6 +208,32 @@ jobs:
             node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').split('\n');let type='(none)',lastE=null;const vol={};const AREA=Math.PI*(1.75/2)**2;for(const l of lines){const m=l.match(/^;TYPE:(.+)$/);if(m){type=m[1].trim();continue;}const e=l.match(/^G1 .* E([-0-9.]+)/);if(e){const v=parseFloat(e[1]);if(lastE!==null&&v>lastE){vol[type]=(vol[type]||0)+(v-lastE);}lastE=v;}}let sup=0,tot=0;for(const[k,len]of Object.entries(vol)){const c=len*AREA/1000;tot+=c;if(/Support/.test(k))sup+=c;}console.log('support cm3:',sup.toFixed(2),'total cm3:',tot.toFixed(2),'grams@1.24:',(tot*1.24).toFixed(2));" "$G"
           done
 
+      - name: POC 6 — export canonical settings from reference 3MF, then STL route
+        if: always()
+        run: |
+          set +e
+          echo "### 6a: export-settings from the reference project ###"
+          bambu-studio test-fixtures/chibi-roger-federer-elegant-backhand-tennis.3mf --export-settings bs-exported.json > poc-export.log 2>&1
+          RC=$?
+          echo "export exit=$RC"
+          ls -la bs-exported.json 2>/dev/null || true
+          [ -f bs-exported.json ] && { echo "--- exported head ---"; head -c 1200 bs-exported.json; echo ""; }
+          if [ ! -f bs-exported.json ]; then exit 0; fi
+          echo "### 6b: STL with exported settings (single slot) ###"
+          bambu-studio --slice 0 --debug 1 --load-settings "bs-exported.json" --export-3mf poc-stl-exp.gcode.3mf test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl > poc-stl-exp.log 2>&1
+          RC6B=$?
+          echo "6b exit=$RC6B"
+          if [ $RC6B -ne 0 ]; then tail -12 poc-stl-exp.log; fi
+          if [ $RC6B -eq 0 ]; then
+            rm -rf exp6b && mkdir exp6b && (cd exp6b && unzip -o ../poc-stl-exp.gcode.3mf > /dev/null)
+            grep -o 'key="prediction" value="[0-9]*"' exp6b/Metadata/slice_info.config || true
+            grep -o 'key="weight" value="[0-9.]*"' exp6b/Metadata/slice_info.config || true
+            grep -o 'used_for_support="[a-z]*"' exp6b/Metadata/slice_info.config || true
+            G=$(find exp6b -name '*.gcode' | head -1)
+            for pat in '^; support_type' '^; curr_bed_type' '^; layer_height = ' '^; nozzle_temperature' '^; hot_plate_temp'; do grep -E "$pat" "$G" | head -1 || true; done
+            echo "support marker count:"; grep -c ';TYPE:Support material' "$G" || true
+          fi
+
       - name: Upload all POC artifacts and logs
         if: always()
         uses: actions/upload-artifact@v4
