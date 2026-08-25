@@ -1151,5 +1151,6 @@
         "Auto Lift"
     ],
     "from": "user",
-    "type": "machine"
+    "type": "machine",
+    "inherits": "Bambu Lab A1 0.4 nozzle"
 }

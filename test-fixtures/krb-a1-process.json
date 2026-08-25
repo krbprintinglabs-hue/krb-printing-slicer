@@ -1154,5 +1154,6 @@
     "type": "process",
     "compatible_printers": [
         "Bambu Lab A1 0.4 nozzle"
-    ]
+    ],
+    "inherits": "0.20mm Standard @BBL A1"
 }

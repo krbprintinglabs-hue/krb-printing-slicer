@@ -1151,5 +1151,9 @@
         "Auto Lift"
     ],
     "from": "user",
-    "type": "filament"
+    "type": "filament",
+    "inherits": "Generic PLA @BBL A1",
+    "compatible_printers": [
+        "Bambu Lab A1 0.4 nozzle"
+    ]
 }
