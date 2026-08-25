@@ -22,8 +22,6 @@
     "avoid_crossing_wall_includes_support": "0",
     "bed_custom_model": "",
     "bed_custom_texture": "",
-    "bed_exclude_area": [],
-    "bed_heat_soak_area": [],
     "bed_temperature_formula": "by_first_filament",
     "before_layer_change_gcode": "",
     "best_object_pos": "0.5,0.5",
@@ -180,8 +178,6 @@
     "extruder_offset": [
         "0x0"
     ],
-    "extruder_printable_area": [],
-    "extruder_printable_height": [],
     "extruder_type": [
         "Direct Drive"
     ],
@@ -802,7 +798,6 @@
     "physical_extruder_map": [
         "0"
     ],
-    "post_process": [],
     "pre_start_fan_time": [
         "0"
     ],
@@ -1140,7 +1135,6 @@
     ],
     "wrapping_detection_gcode": "",
     "wrapping_detection_layers": "20",
-    "wrapping_exclude_area": [],
     "xy_contour_compensation": "0",
     "xy_hole_compensation": "0",
     "z_direction_outwall_speed_continuous": "0",
