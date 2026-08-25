@@ -6,7 +6,10 @@
  */
 
 export const config = {
-  /** Path to PrusaSlicer CLI binary. */
+  /** Slicing backend: "prusa" (production default) or "bambu" (migration branch). */
+  slicerBackend: (process.env.SLICER_BACKEND ?? "prusa").toLowerCase(),
+
+  /** Path to PrusaSlicer CLI binary (prusa backend) or Bambu CLI (bambu backend). */
   slicerPath: process.env.SLICER_PATH ?? "prusa-slicer",
 
   /** Maximum time (ms) a single PrusaSlicer execution can run. */
@@ -42,6 +45,9 @@ export function validateConfig(): string[] {
   const missing: string[] = [];
 
   if (!config.slicerPath) missing.push("SLICER_PATH");
+  if (config.slicerBackend !== "prusa" && config.slicerBackend !== "bambu") {
+    missing.push("SLICER_BACKEND (must be 'prusa' or 'bambu')");
+  }
   if (!config.firebaseProjectId && !config.firebaseServiceAccountPath) {
     missing.push("FIREBASE_PROJECT_ID or FIREBASE_SERVICE_ACCOUNT_PATH");
   }

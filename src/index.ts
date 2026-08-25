@@ -23,6 +23,7 @@ import { config, validateConfig } from "./config.js";
 import { initializeFirestore, claimJob, completeJob, failJob, type SliceJob } from "./firestore.js";
 import { downloadFromStorage } from "./storage.js";
 import { runPrusaSlicer, checkPrusaSlicer } from "./slicer.js";
+import { runBambuSlicer, checkBambu } from "./bambu-slicer.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -71,19 +72,28 @@ async function processJob(jobId: string): Promise<void> {
       );
     }
 
-    log("info", "Running PrusaSlicer", {
+    log("info", "Running slicer", {
       jobId,
+      backend: config.slicerBackend,
       quality: (currentJob as SliceJob).quality,
       material: (currentJob as SliceJob).material,
     });
 
-    // Run PrusaSlicer
-    const execution = await runPrusaSlicer(
-      inputFilePath,
-      dir,
-      (currentJob as SliceJob).quality,
-      (currentJob as SliceJob).material,
-    );
+    // Backend selection: prusa = production default; bambu = migration branch.
+    const execution =
+      config.slicerBackend === "bambu"
+        ? await runBambuSlicer(
+            inputFilePath,
+            dir,
+            (currentJob as SliceJob).quality,
+            (currentJob as SliceJob).material,
+          )
+        : await runPrusaSlicer(
+            inputFilePath,
+            dir,
+            (currentJob as SliceJob).quality,
+            (currentJob as SliceJob).material,
+          );
 
     if (!execution.success || !execution.result) {
       throw new Error(execution.error ?? "Slicing failed with no error message");
@@ -165,10 +175,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Check PrusaSlicer availability
-  const slicerAvailable = await checkPrusaSlicer();
+  // Check slicing backend availability (prusa = production default)
+  const slicerAvailable =
+    config.slicerBackend === "bambu" ? await checkBambu() : await checkPrusaSlicer();
   if (!slicerAvailable) {
-    log("error", "PrusaSlicer not found at configured path", {
+    log("error", "Slicing backend not available at configured path", {
+      backend: config.slicerBackend,
       slicerPath: config.slicerPath,
     });
     process.exit(1);
