@@ -91,10 +91,13 @@ jobs:
           GCODE=$(find . -name '*.gcode' | head -1)
           echo "gcode file: $GCODE"
           ls -la "$GCODE"
-          grep -E '^; (total filament used \[g\]|filament used \[cm3\]|estimated printing time)' "$GCODE"
-          grep -c ';TYPE:Support material' "$GCODE" || true
+          echo "--- filament/time footer candidates ---"
+          grep -aiE '^;.*(filament|printing time|estimat)' "$GCODE" | tail -40 || true
+          echo "--- last 30 lines of gcode ---"
+          tail -30 "$GCODE"
 
       - name: Download official A1 profile JSONs at pinned tag
+        if: always()
         run: |
           mkdir -p bs-profiles
           curl -fSL --retry 3 -o bs-profiles/machine.json  "$BS_MACHINE_JSON"
