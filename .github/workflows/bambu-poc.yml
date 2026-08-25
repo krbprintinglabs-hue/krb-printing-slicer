@@ -189,6 +189,7 @@ jobs:
           exit $FAILURES
 
       - name: POC 5b — material/quality/advanced combo matrix (values verified in G-code)
+        if: always()
         run: |
           set +e
           FAILS=0
