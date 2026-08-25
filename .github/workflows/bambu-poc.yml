@@ -37,6 +37,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build worker (resolver)
+        run: |
+          npm ci
+          npm run build
+
       - name: Install runtime libraries
         run: |
           sudo apt-get update
