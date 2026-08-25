@@ -4,11 +4,14 @@
 # keeps using PrusaSlicer (see slice.yml). Restore point for the known-good
 # PrusaSlicer implementation: git tag/branch `prusa-a1-known-good`.
 #
-# Purpose: validate whether pinned Bambu Studio can run headlessly on GitHub
-# Actions ubuntu-latest and reproduce the Bambu Studio GUI reference result.
-#
-# Pinned version: Bambu Studio v02.08.02.61 (same version that authored the
-# reference 3MF project). No dynamic "latest" downloads.
+# Operational hardening in this revision:
+#   - AppImage cached by exact version key, verified before use, re-fetched on
+#     corruption; never resolves "latest".
+#   - Multi-STL matrix over the proven full-config STL route.
+#   - Failure battery: garbage/empty STL, missing config must fail cleanly.
+#   - Repeatability: same STL sliced twice, results compared.
+#   - Results read exclusively from slice_info.config (prediction/weight/
+#     used_for_support) matching src/bambu-poc-result.ts semantics.
 
 name: Bambu Studio POC
 
@@ -20,17 +23,15 @@ permissions:
 
 env:
   BS_VERSION: v02.08.02.61
+  BS_CACHE_KEY: bambu-studio-v02.08.02.61-ubuntu24.04-x64
   BS_APPIMAGE_URL: https://github.com/bambulab/BambuStudio/releases/download/v02.08.02.61/BambuStudio_ubuntu24.04-v02.08.02.61-20260820225108.AppImage
-  # Official profiles at the same pinned tag:
-  BS_MACHINE_JSON: https://raw.githubusercontent.com/bambulab/BambuStudio/v02.08.02.61/resources/profiles/BBL/machine/Bambu%20Lab%20A1%200.4%20nozzle.json
-  BS_PROCESS_JSON: https://raw.githubusercontent.com/bambulab/BambuStudio/v02.08.02.61/resources/profiles/BBL/process/0.20mm%20Standard%20%40BBL%20A1.json
-  BS_FILAMENT_JSON: https://raw.githubusercontent.com/bambulab/BambuStudio/v02.08.02.61/resources/profiles/BBL/filament/Generic%20PLA%20%40BBL%20A1.json
+  BS_HOME: /home/runner/bambu-studio
 
 jobs:
   poc:
     name: Headless Bambu Studio validation
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout repository
@@ -46,16 +47,45 @@ jobs:
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             libwebkit2gtk-4.1-0 || true
 
-      - name: Download pinned Bambu Studio AppImage
+      - name: Cache pinned Bambu Studio AppImage
+        id: bs_cache
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/bambu-studio
+          key: bambu-studio-v02.08.02.61-ubuntu24.04-x64
+
+      - name: Download pinned Bambu Studio (cache miss only)
+        if: steps.bs_cache.outputs.cache-hit != 'true'
         run: |
-          curl -fL --retry 3 -o /tmp/bs.AppImage "$BS_APPIMAGE_URL"
-          chmod +x /tmp/bs.AppImage
-          (cd /tmp && ./bs.AppImage --appimage-extract > /dev/null)
-          ls /tmp/squashfs-root | head -20
-          sudo ln -sf /tmp/squashfs-root/AppRun /usr/local/bin/bambu-studio
+          mkdir -p "$BS_HOME"
+          curl -fL --retry 3 -o "$BS_HOME/bs.AppImage" "$BS_APPIMAGE_URL"
+          chmod +x "$BS_HOME/bs.AppImage"
+          (cd "$BS_HOME" && ./bs.AppImage --appimage-extract > /dev/null)
+
+      - name: Verify cached Bambu Studio (repair on corruption)
+        run: |
+          set +e
+          OK=1
+          [ -f "$BS_HOME/bs.AppImage" ] || OK=0
+          [ -x "$BS_HOME/squashfs-root/AppRun" ] || OK=0
+          if [ "$OK" = "1" ]; then
+            sudo ln -sf "$BS_HOME/squashfs-root/AppRun" /usr/local/bin/bambu-studio
+            bambu-studio --help > /dev/null 2>&1 || OK=0
+          fi
+          if [ "$OK" != "1" ]; then
+            echo "::warning::Bambu cache missing or corrupt — re-downloading pinned $BS_VERSION"
+            rm -rf "$BS_HOME"
+            mkdir -p "$BS_HOME"
+            curl -fL --retry 3 -o "$BS_HOME/bs.AppImage" "$BS_APPIMAGE_URL" || exit 1
+            chmod +x "$BS_HOME/bs.AppImage"
+            (cd "$BS_HOME" && ./bs.AppImage --appimage-extract > /dev/null) || exit 1
+            sudo ln -sf "$BS_HOME/squashfs-root/AppRun" /usr/local/bin/bambu-studio
+            bambu-studio --help > /dev/null 2>&1 || { echo "::error::re-downloaded Bambu still broken"; exit 1; }
+          fi
+          echo "verified pinned Bambu Studio $BS_VERSION"
 
       - name: POC 1 — headless startup (--help)
-        id: help
+        id: poc_help
         continue-on-error: true
         run: |
           set +e
@@ -63,167 +93,98 @@ jobs:
           RC=$?
           set -e
           echo "exit_code=$RC" >> "$GITHUB_OUTPUT"
-          head -15 poc-help.log
+          head -5 poc-help.log
           exit $RC
 
       - name: POC 2 — slice reference 3MF with embedded A1 project settings
-        id: slice3mf
+        id: poc_3mf
         continue-on-error: true
         run: |
           set +e
-          bambu-studio \
-            --slice 0 \
-            --debug 2 \
-            --export-3mf poc-chibi.gcode.3mf \
-            test-fixtures/chibi-roger-federer-elegant-backhand-tennis.3mf \
-            > poc-slice-3mf.log 2>&1
+          bambu-studio --slice 0 --debug 2 --export-3mf poc-chibi.gcode.3mf test-fixtures/chibi-roger-federer-elegant-backhand-tennis.3mf > poc-slice-3mf.log 2>&1
           RC=$?
           set -e
           echo "exit_code=$RC" >> "$GITHUB_OUTPUT"
-          tail -25 poc-slice-3mf.log
+          tail -8 poc-slice-3mf.log
           exit $RC
 
-      - name: Extract results from sliced 3MF
-        if: steps.slice3mf.outputs.exit_code == '0'
+      - name: POC 3 — extract 3MF-route results (slice_info)
+        if: steps.poc_3mf.outputs.exit_code == '0'
         run: |
           mkdir -p poc-out && cd poc-out
           unzip -o ../poc-chibi.gcode.3mf > /dev/null
-          echo "--- archive contents ---"
-          find . -type f | sort
-          echo "--- plate json ---"
-          cat Metadata/plate_1.json || true
-          echo ""
-          echo "--- slice_info ---"
-          cat Metadata/slice_info.config || true
-          for f in Metadata/slice_info*; do [ -f "$f" ] && echo "--- $f ---" && cat "$f"; done
-          GCODE=$(find . -name '*.gcode' | head -1)
-          echo "--- gcode size ---"
-          ls -la "$GCODE"
-          echo "--- unanchored footer search ---"
-          grep -aiE '(filament used|filament weight|printing time|estimat)' "$GCODE" | tail -25 || true
+          cat Metadata/slice_info.config | grep -E 'prediction|weight|used_for_support'
 
-      - name: Download official A1 profile JSONs at pinned tag
-        if: always()
-        run: |
-          mkdir -p bs-profiles
-          curl -fSL --retry 3 -o bs-profiles/machine.json  "$BS_MACHINE_JSON"
-          curl -fSL --retry 3 -o bs-profiles/process.json  "$BS_PROCESS_JSON"
-          curl -fSL --retry 3 -o bs-profiles/filament.json "$BS_FILAMENT_JSON"
-          ls -la bs-profiles
-
-      - name: POC 3 — slice STL with forced A1/PLA settings
-        id: slicestl
-        continue-on-error: true
+      - name: POC 4 — repeatability (same STL twice, full config)
+        id: poc_repeat
         run: |
           set +e
-          bambu-studio \
-            --slice 0 \
-            --debug 2 \
-            --load-settings "bs-profiles/machine.json;bs-profiles/process.json" \
-            --load-filaments "bs-profiles/filament.json" \
-            --export-3mf poc-chibi-stl.gcode.3mf \
-            test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl \
-            > poc-slice-stl.log 2>&1
-          RC=$?
-          set -e
-          echo "exit_code=$RC" >> "$GITHUB_OUTPUT"
-          tail -25 poc-slice-stl.log
-          exit $RC
-
-      - name: Extract results from STL slice
-        if: steps.slicestl.outputs.exit_code == '0'
-        run: |
-          mkdir -p poc-out-stl && cd poc-out-stl
-          unzip -o ../poc-chibi-stl.gcode.3mf > /dev/null
-          cat Metadata/plate_1.json || true
-          for f in Metadata/slice_info*; do [ -f "$f" ] && echo "--- $f ---" && cat "$f"; done
-          GCODE=$(find . -name '*.gcode' | head -1)
-          ls -la "$GCODE"
-          grep -aiE '(filament used|filament weight|printing time|estimat)' "$GCODE" | tail -25 || true
-
-      - name: POC 4 — repeat-run stability (3 identical slices of the STL)
-        if: always()
-        run: |
-          set +e
-          OVERALL=0
-          for i in 1 2 3; do
-            bambu-studio --slice 0 --load-settings "bs-profiles/machine.json;bs-profiles/process.json" --load-filaments "bs-profiles/filament.json" --export-3mf "poc-repeat-$i.gcode.3mf" test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl > "poc-repeat-$i.log" 2>&1
+          ARGS=(--slice 0 --load-settings "test-fixtures/krb-a1-machine.json;test-fixtures/krb-a1-process.json" --load-filaments "test-fixtures/krb-a1-filament.json")
+          FIX=test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl
+          declare -A T; declare -A W; declare -A S
+          for i in 1 2; do
+            bambu-studio "${ARGS[@]}" --export-3mf "poc-rep-$i.gcode.3mf" "$FIX" > "poc-rep-$i.log" 2>&1
             RC=$?
-            echo "--- run $i (slice exit $RC) ---"
-            if [ $RC -ne 0 ]; then OVERALL=1; tail -8 "poc-repeat-$i.log"; continue; fi
-            rm -rf "r$i"; mkdir -p "r$i"
-            (cd "r$i" && unzip -o "../poc-repeat-$i.gcode.3mf" > /dev/null)
-            PRED=$(grep -o 'key="prediction" value="[0-9]*"' "r$i/Metadata/slice_info.config" | grep -o '[0-9]*')
-            WGT=$(grep -o 'key="weight" value="[0-9.]*"' "r$i/Metadata/slice_info.config" | grep -o '[0-9.]*')
-            echo "run $i: prediction=${PRED}s weight=${WGT}g"
+            echo "run $i exit=$RC"
+            [ $RC -ne 0 ] && { tail -10 "poc-rep-$i.log"; exit 1; }
+            rm -rf "rep$i" && mkdir "rep$i" && (cd "rep$i" && unzip -o "../poc-rep-$i.gcode.3mf" > /dev/null)
+            SI="rep$i/Metadata/slice_info.config"
+            T[$i]=$(grep -o 'key="prediction" value="[0-9]*"' "$SI" | grep -o '[0-9]*')
+            W[$i]=$(grep -o 'key="weight" value="[0-9.]*"' "$SI" | grep -o '[0-9.]*' | head -1)
+            S[$i]=$(grep -c 'used_for_support="true"' "$SI")
+            echo "run $i: prediction=${T[$i]}s weight=${W[$i]}g supportEntries=${S[$i]}"
           done
-          echo "repeat_overall=$OVERALL"
-          exit $OVERALL
+          DT=$(( T[1] > T[2] ? T[1]-T[2] : T[2]-T[1] ))
+          DW=$(node -e "console.log(Math.abs(${$W[1]}-${W[2]}).toFixed(2))")
+          echo "deltas: time=${DT}s weight=${DW}g"
+          if [ $DT -gt 120 ]; then echo "::error::time not repeatable (${DT}s apart)"; exit 1; fi
+          node -e "process.exit($DW > 1.0 ? 1 : 0)" || { echo "::error::weight not repeatable (${DW}g apart)"; exit 1; }
 
-      - name: POC 5 — STL with FULL resolved A1 configuration (typed machine/process/filament)
-        if: always()
+      - name: POC 5 — multi-STL matrix with full A1 config
         run: |
           set +e
-          ls -la test-fixtures/krb-a1-*.json
-          echo "### STL + full typed configuration ###"
-          bambu-studio --slice 0 --debug 2 \
-            --load-settings "test-fixtures/krb-a1-machine.json;test-fixtures/krb-a1-process.json" \
-            --load-filaments "test-fixtures/krb-a1-filament.json" \
-            --export-3mf poc-stl-full.gcode.3mf \
-            test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl \
-            > poc-stl-full.log 2>&1
-          RC=$?
-          echo "stl-full exit=$RC"
-          [ $RC -ne 0 ] && tail -15 poc-stl-full.log
-          if [ $RC -eq 0 ]; then
-            rm -rf full5a && mkdir full5a && (cd full5a && unzip -o ../poc-stl-full.gcode.3mf > /dev/null)
-            echo "--- slice_info ---"
-            cat full5a/Metadata/slice_info.config | head -20 || true
-            G=$(find full5a -name '*.gcode' | head -1)
-            echo "--- gcode size ---"; ls -la "$G"
-            echo "--- config assertions (must show A1 values, not defaults) ---"
-            for pat in '^; support_type = ' '^; enable_support = ' '^; nozzle_temperature' '^; hot_plate_temp' '^; curr_bed_type' '^; layer_height = ' '^; outer_wall_speed' '^; printer_model'; do
-              grep -E "$pat" "$G" | head -2 || true
-            done
-            echo "--- support marker count ---"; grep -c ';TYPE:Support material' "$G" || true
-          fi
-
-      - name: Support material measurement (;TYPE markers)
-        if: always()
-        run: |
-          for d in full5a full5b poc-out; do
-            G=$(find $d -name '*.gcode' 2>/dev/null | head -1)
-            [ -z "$GCODE$G" ] && continue
-            [ -z "$G" ] && continue
-            echo "--- support breakdown for $G ---"
-            node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').split('\n');let type='(none)',lastE=null;const vol={};const AREA=Math.PI*(1.75/2)**2;for(const l of lines){const m=l.match(/^;TYPE:(.+)$/);if(m){type=m[1].trim();continue;}const e=l.match(/^G1 .* E([-0-9.]+)/);if(e){const v=parseFloat(e[1]);if(lastE!==null&&v>lastE){vol[type]=(vol[type]||0)+(v-lastE);}lastE=v;}}let sup=0,tot=0;for(const[k,len]of Object.entries(vol)){const c=len*AREA/1000;tot+=c;if(/Support/.test(k))sup+=c;}console.log('support cm3:',sup.toFixed(2),'total cm3:',tot.toFixed(2),'grams@1.24:',(tot*1.24).toFixed(2));" "$G"
+          for F in chibi-roger-federer-elegant-backhand-tennis krb-cube-20mm krb-l-bracket; do
+            START=$SECONDS
+            bambu-studio --slice 0 --load-settings "test-fixtures/krb-a1-machine.json;test-fixtures/krb-a1-process.json" --load-filaments "test-fixtures/krb-a1-filament.json" --export-3mf "mx-$F.gcode.3mf" "test-fixtures/$F.stl" > "mx-$F.log" 2>&1
+            RC=$?
+            ELAPSED=$(( SECONDS - START ))
+            if [ $RC -ne 0 ]; then
+              echo "| $F | FAILED exit=$RC |"
+              tail -8 "mx-$F.log"
+              continue
+            fi
+            rm -rf mxd && mkdir mxd && (cd mxd && unzip -o "../mx-$F.gcode.3mf" > /dev/null)
+            SI=mxd/Metadata/slice_info.config
+            PRED=$(grep -o 'key="prediction" value="[0-9]*"' "$SI" | grep -o '[0-9]*')
+            WGT=$(grep -o 'key="weight" value="[0-9.]*"' "$SI" | grep -o '[0-9.]*' | head -1)
+            SUP=$(grep -c 'used_for_support="true"' "$SI")
+            GCODE=$(find mxd -name '*.gcode' | head -1)
+            GSZ=$(stat -c%s "$GCODE")
+            WARN=$(grep -ci 'warn' "mx-$F.log")
+            MIN=$(( PRED / 60 ))
+            echo "| $F | exit=$RC | ${PRED}s (${MIN}min) | ${WGT}g | supportUsed=$SUP | gcode=${GSZ}B | runtime=${ELAPSED}s | logWarnings=$WARN |"
           done
 
-      - name: POC 6 — export canonical settings from reference 3MF, then STL route
-        if: always()
+      - name: POC 6 — failure battery (must fail cleanly, never fake data)
         run: |
           set +e
-          echo "### 6a: export-settings from the reference project ###"
-          bambu-studio test-fixtures/chibi-roger-federer-elegant-backhand-tennis.3mf --export-settings bs-exported.json > poc-export.log 2>&1
+          printf 'this is definitely not a valid binary STL payload\n' > bad-garbage.stl
+          : > bad-empty.stl
+          FAILURES=0
+          bambu-studio --slice 0 --load-settings "test-fixtures/krb-a1-machine.json;test-fixtures/krb-a1-process.json" --load-filaments "test-fixtures/krb-a1-filament.json" --export-3mf fb-garbage.gcode.3mf bad-garbage.stl > fb-garbage.log 2>&1
           RC=$?
-          echo "export exit=$RC"
-          ls -la bs-exported.json 2>/dev/null || true
-          [ -f bs-exported.json ] && { echo "--- exported head ---"; head -c 1200 bs-exported.json; echo ""; }
-          if [ ! -f bs-exported.json ]; then exit 0; fi
-          echo "### 6b: STL with exported settings (single slot) ###"
-          bambu-studio --slice 0 --debug 1 --load-settings "bs-exported.json" --export-3mf poc-stl-exp.gcode.3mf test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl > poc-stl-exp.log 2>&1
-          RC6B=$?
-          echo "6b exit=$RC6B"
-          if [ $RC6B -ne 0 ]; then tail -12 poc-stl-exp.log; fi
-          if [ $RC6B -eq 0 ]; then
-            rm -rf exp6b && mkdir exp6b && (cd exp6b && unzip -o ../poc-stl-exp.gcode.3mf > /dev/null)
-            grep -o 'key="prediction" value="[0-9]*"' exp6b/Metadata/slice_info.config || true
-            grep -o 'key="weight" value="[0-9.]*"' exp6b/Metadata/slice_info.config || true
-            grep -o 'used_for_support="[a-z]*"' exp6b/Metadata/slice_info.config || true
-            G=$(find exp6b -name '*.gcode' | head -1)
-            for pat in '^; support_type' '^; curr_bed_type' '^; layer_height = ' '^; nozzle_temperature' '^; hot_plate_temp'; do grep -E "$pat" "$G" | head -1 || true; done
-            echo "support marker count:"; grep -c ';TYPE:Support material' "$G" || true
-          fi
+          if [ $RC -eq 0 ]; then echo "FAIL: garbage STL sliced without error"; FAILURES=$((FAILURES+1)); else echo "PASS: garbage STL rejected (exit $RC)"; fi
+          bambu-studio --slice 0 --load-settings "test-fixtures/krb-a1-machine.json;test-fixtures/krb-a1-process.json" --load-filaments "test-fixtures/krb-a1-filament.json" --export-3mf fb-empty.gcode.3mf bad-empty.stl > fb-empty.log 2>&1
+          RC=$?
+          if [ $RC -eq 0 ]; then echo "FAIL: empty STL sliced without error"; FAILURES=$((FAILURES+1)); else echo "PASS: empty STL rejected (exit $RC)"; fi
+          bambu-studio --slice 0 --load-settings "missing-machine.json;missing-process.json" --load-filaments "missing-filament.json" --export-3mf fb-noconf.gcode.3mf test-fixtures/krb-cube-20mm.stl > fb-noconf.log 2>&1
+          RC=$?
+          if [ $RC -eq 0 ]; then echo "FAIL: missing config accepted"; FAILURES=$((FAILURES+1)); else echo "PASS: missing config rejected (exit $RC)"; fi
+          for OUT in fb-garbage.gcode.3mf fb-empty.gcode.3mf fb-noconf.gcode.3mf; do
+            if [ -f "$OUT" ]; then echo "FAIL: output $OUT exists despite failure"; FAILURES=$((FAILURES+1)); else echo "PASS: no fabricated output ($OUT absent)"; fi
+          done
+          echo "failure-battery unexpected-successes=$FAILURES"
+          exit $FAILURES
 
       - name: Upload all POC artifacts and logs
         if: always()
@@ -232,13 +193,13 @@ jobs:
           name: bambu-poc-logs
           path: |
             poc-*.log
-            poc-help.log
+            mx-*.log
+            fb-*.log
             *.gcode.3mf
           retention-days: 7
 
       - name: POC summary gate
         if: always()
         run: |
-          echo "help   exit: ${{ steps.help.outputs.exit_code }}"
-          echo "3mf    exit: ${{ steps.slice3mf.outputs.exit_code }}"
-          echo "stl    exit: ${{ steps.slicestl.outputs.exit_code }}"
+          echo "help   exit: ${{ steps.poc_help.outputs.exit_code }}"
+          echo "3mf    exit: ${{ steps.poc_3mf.outputs.exit_code }}"
