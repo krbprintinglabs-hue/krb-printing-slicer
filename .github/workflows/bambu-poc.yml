@@ -88,13 +88,19 @@ jobs:
         run: |
           mkdir -p poc-out && cd poc-out
           unzip -o ../poc-chibi.gcode.3mf > /dev/null
+          echo "--- archive contents ---"
+          find . -type f | sort
+          echo "--- plate json ---"
+          cat Metadata/plate_1.json || true
+          echo ""
+          echo "--- slice_info ---"
+          cat Metadata/slice_info.config || true
+          for f in Metadata/slice_info*; do [ -f "$f" ] && echo "--- $f ---" && cat "$f"; done
           GCODE=$(find . -name '*.gcode' | head -1)
-          echo "gcode file: $GCODE"
+          echo "--- gcode size ---"
           ls -la "$GCODE"
-          echo "--- filament/time footer candidates ---"
-          grep -aiE '^;.*(filament|printing time|estimat)' "$GCODE" | tail -40 || true
-          echo "--- last 30 lines of gcode ---"
-          tail -30 "$GCODE"
+          echo "--- unanchored footer search ---"
+          grep -aiE '(filament used|filament weight|printing time|estimat)' "$GCODE" | tail -25 || true
 
       - name: Download official A1 profile JSONs at pinned tag
         if: always()
@@ -129,12 +135,14 @@ jobs:
         run: |
           mkdir -p poc-out-stl && cd poc-out-stl
           unzip -o ../poc-chibi-stl.gcode.3mf > /dev/null
+          cat Metadata/plate_1.json || true
+          for f in Metadata/slice_info*; do [ -f "$f" ] && echo "--- $f ---" && cat "$f"; done
           GCODE=$(find . -name '*.gcode' | head -1)
-          echo "gcode file: $GCODE"
-          grep -E '^; (total filament used \[g\]|filament used \[cm3\]|estimated printing time)' "$GCODE"
+          ls -la "$GCODE"
+          grep -aiE '(filament used|filament weight|printing time|estimat)' "$GCODE" | tail -25 || true
 
       - name: POC 4 — repeat-run stability (3 identical slices of the STL)
-        if: steps.slicestl.outputs.exit_code == '0'
+        if: always()
         run: |
           for i in 1 2 3; do
             bambu-studio \
