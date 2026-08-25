@@ -160,6 +160,62 @@ jobs:
           echo "repeat_overall=$OVERALL"
           exit $OVERALL
 
+      - name: POC 5 — STL with FULL resolved A1 configuration (from reference project)
+        if: always()
+        run: |
+          set +e
+          CFG=test-fixtures/krb-a1-full-config.json
+          ls -la "$CFG"
+          echo "### variant 5a: single slot ###"
+          bambu-studio --slice 0 --debug 1 --load-settings "$CFG" --export-3mf poc-stl-full.gcode.3mf test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl > poc-stl-full.log 2>&1
+          RC5A=$?
+          echo "5a exit=$RC5A"
+          if [ $RC5A -eq 0 ]; then
+            rm -rf full5a && mkdir full5a && (cd full5a && unzip -o ../poc-stl-full.gcode.3mf > /dev/null)
+            grep -o 'key="prediction" value="[0-9]*"' full5a/Metadata/slice_info.config || true
+            grep -o 'key="weight" value="[0-9.]*"' full5a/Metadata/slice_info.config || true
+            grep -o 'used_for_support="[a-z]*"' full5a/Metadata/slice_info.config || true
+            G=$(find full5a -name '*.gcode' | head -1)
+            for pat in '^; support_type = ' '^; enable_support = ' '^; nozzle_temperature' '^; hot_plate_temp' '^; curr_bed_type' '^; layer_height = '; do
+              grep -E "$pat" "$G" | head -2 || true
+            done
+            echo "support marker count:"; grep -c ';TYPE:Support material' "$G" || true
+          fi
+          echo "### variant 5b: dual slot (same full config) ###"
+          bambu-studio --slice 0 --debug 1 --load-settings "$CFG;$CFG" --export-3mf poc-stl-fullb.gcode.3mf test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl > poc-stl-fullb.log 2>&1
+          RC5B=$?
+          echo "5b exit=$RC5B"
+          if [ $RC5B -eq 0 ]; then
+            rm -rf full5b && mkdir full5b && (cd full5b && unzip -o ../poc-stl-fullb.gcode.3mf > /dev/null)
+            grep -o 'key="prediction" value="[0-9]*"' full5b/Metadata/slice_info.config || true
+            grep -o 'key="weight" value="[0-9.]*"' full5b/Metadata/slice_info.config || true
+            grep -o 'used_for_support="[a-z]*"' full5b/Metadata/slice_info.config || true
+            G=$(find full5b -name '*.gcode' | head -1)
+            for pat in '^; support_type = ' '^; curr_bed_type' '^; layer_height = '; do
+              grep -E "$pat" "$G" | head -2 || true
+            done
+            echo "support marker count:"; grep -c ';TYPE:Support material' "$G" || true
+          fi
+
+      - name: Support material measurement (;TYPE markers)
+        if: always()
+        run: |
+          for d in full5a full5b poc-out; do
+            G=$(find $d -name '*.gcode' 2>/dev/null | head -1)
+            [ -z "$GCODE$G" ] && continue
+            [ -z "$G" ] && continue
+            echo "--- support breakdown for $G ---"
+            node -e "
+const fs=require('fs');
+const lines=fs.readFileSync(process.argv[1],'utf8').split('\n');
+let type='(none)',lastE=null;const vol={};const AREA=Math.PI*(1.75/2)**2;
+for(const l of lines){const m=l.match(/^;TYPE:(.+)$/);if(m){type=m[1].trim();continue;}
+const e=l.match(/^G1 .* E([-0-9.]+)/);if(e){const v=parseFloat(e[1]);if(lastE!==null&&v>lastE){vol[type]=(vol[type]||0)+(v-lastE);}lastE=v;}}
+let sup=0,tot=0;for(const[k,len]of Object.entries(vol)){const c=len*AREA/1000;tot+=c;if(/Support/.test(k))sup+=c;}
+console.log('support cm3:',sup.toFixed(2),'total cm3:',tot.toFixed(2),'grams@1.24:',(tot*1.24).toFixed(2));
+" "$G"
+          done
+
       - name: Upload all POC artifacts and logs
         if: always()
         uses: actions/upload-artifact@v4
