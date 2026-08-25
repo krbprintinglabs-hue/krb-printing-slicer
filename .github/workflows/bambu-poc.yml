@@ -1,0 +1,163 @@
+# Bambu Studio proof-of-concept — ISOLATED EXPERIMENT.
+#
+# This workflow is NOT part of the production pipeline. The production worker
+# keeps using PrusaSlicer (see slice.yml). Restore point for the known-good
+# PrusaSlicer implementation: git tag/branch `prusa-a1-known-good`.
+#
+# Purpose: validate whether pinned Bambu Studio can run headlessly on GitHub
+# Actions ubuntu-latest and reproduce the Bambu Studio GUI reference result.
+#
+# Pinned version: Bambu Studio v02.08.02.61 (same version that authored the
+# reference 3MF project). No dynamic "latest" downloads.
+
+name: Bambu Studio POC
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BS_VERSION: v02.08.02.61
+  BS_APPIMAGE_URL: https://github.com/bambulab/BambuStudio/releases/download/v02.08.02.61/BambuStudio_ubuntu24.04-v02.08.02.61-20260820225108.AppImage
+  # Official profiles at the same pinned tag:
+  BS_MACHINE_JSON: https://raw.githubusercontent.com/bambulab/BambuStudio/v02.08.02.61/resources/profiles/BBL/machine/Bambu%20Lab%20A1%200.4%20nozzle.json
+  BS_PROCESS_JSON: https://raw.githubusercontent.com/bambulab/BambuStudio/v02.08.02.61/resources/profiles/BBL/process/0.20mm%20Standard%20%40BBL%20A1.json
+  BS_FILAMENT_JSON: https://raw.githubusercontent.com/bambulab/BambuStudio/v02.08.02.61/resources/profiles/BBL/filament/Generic%20PLA%20%40BBL%20A1.json
+
+jobs:
+  poc:
+    name: Headless Bambu Studio validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libgtk-3-0 libxkbcommon0 libfontconfig1 libdbus-1-3 \
+            libx11-xcb1 || true
+
+      - name: Download pinned Bambu Studio AppImage
+        run: |
+          curl -fL --retry 3 -o /tmp/bs.AppImage "$BS_APPIMAGE_URL"
+          chmod +x /tmp/bs.AppImage
+          (cd /tmp && ./bs.AppImage --appimage-extract > /dev/null)
+          ls /tmp/squashfs-root | head -20
+          sudo ln -sf /tmp/squashfs-root/AppRun /usr/local/bin/bambu-studio
+
+      - name: POC 1 — headless startup (--help)
+        id: help
+        continue-on-error: true
+        run: |
+          set +e
+          bambu-studio --help > poc-help.log 2>&1
+          RC=$?
+          set -e
+          echo "exit_code=$RC" >> "$GITHUB_OUTPUT"
+          head -15 poc-help.log
+          exit $RC
+
+      - name: POC 2 — slice reference 3MF with embedded A1 project settings
+        id: slice3mf
+        continue-on-error: true
+        run: |
+          set +e
+          bambu-studio \
+            --slice 0 \
+            --debug 2 \
+            --export-3mf poc-chibi.gcode.3mf \
+            test-fixtures/chibi-roger-federer-elegant-backhand-tennis.3mf \
+            > poc-slice-3mf.log 2>&1
+          RC=$?
+          set -e
+          echo "exit_code=$RC" >> "$GITHUB_OUTPUT"
+          tail -25 poc-slice-3mf.log
+          exit $RC
+
+      - name: Extract results from sliced 3MF
+        if: steps.slice3mf.outputs.exit_code == '0'
+        run: |
+          mkdir -p poc-out && cd poc-out
+          unzip -o ../poc-chibi.gcode.3mf > /dev/null
+          GCODE=$(find . -name '*.gcode' | head -1)
+          echo "gcode file: $GCODE"
+          ls -la "$GCODE"
+          grep -E '^; (total filament used \[g\]|filament used \[cm3\]|estimated printing time)' "$GCODE"
+          grep -c ';TYPE:Support material' "$GCODE" || true
+
+      - name: Download official A1 profile JSONs at pinned tag
+        run: |
+          mkdir -p bs-profiles
+          curl -fSL --retry 3 -o bs-profiles/machine.json  "$BS_MACHINE_JSON"
+          curl -fSL --retry 3 -o bs-profiles/process.json  "$BS_PROCESS_JSON"
+          curl -fSL --retry 3 -o bs-profiles/filament.json "$BS_FILAMENT_JSON"
+          ls -la bs-profiles
+
+      - name: POC 3 — slice STL with forced A1/PLA settings
+        id: slicestl
+        continue-on-error: true
+        run: |
+          set +e
+          bambu-studio \
+            --slice 0 \
+            --debug 2 \
+            --load-settings "bs-profiles/machine.json;bs-profiles/process.json" \
+            --load-filaments "bs-profiles/filament.json" \
+            --export-3mf poc-chibi-stl.gcode.3mf \
+            test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl \
+            > poc-slice-stl.log 2>&1
+          RC=$?
+          set -e
+          echo "exit_code=$RC" >> "$GITHUB_OUTPUT"
+          tail -25 poc-slice-stl.log
+          exit $RC
+
+      - name: Extract results from STL slice
+        if: steps.slicestl.outputs.exit_code == '0'
+        run: |
+          mkdir -p poc-out-stl && cd poc-out-stl
+          unzip -o ../poc-chibi-stl.gcode.3mf > /dev/null
+          GCODE=$(find . -name '*.gcode' | head -1)
+          echo "gcode file: $GCODE"
+          grep -E '^; (total filament used \[g\]|filament used \[cm3\]|estimated printing time)' "$GCODE"
+
+      - name: POC 4 — repeat-run stability (3 identical slices of the STL)
+        if: steps.slicestl.outputs.exit_code == '0'
+        run: |
+          for i in 1 2 3; do
+            bambu-studio \
+              --slice 0 \
+              --load-settings "bs-profiles/machine.json;bs-profiles/process.json" \
+              --load-filaments "bs-profiles/filament.json" \
+              --export-3mf "poc-repeat-$i.gcode.3mf" \
+              test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl \
+              > "poc-repeat-$i.log" 2>&1
+            echo "--- run $i ---"
+            mkdir -p "r$i" && (cd "r$i" && unzip -o "../poc-repeat-$i.gcode.3mf" > /dev/null)
+            G=$(find "r$i" -name '*.gcode' | head -1)
+            grep -E '^; (total filament used \[g\]|estimated printing time \(normal mode\))' "$G"
+          done
+
+      - name: Upload all POC artifacts and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bambu-poc-logs
+          path: |
+            poc-*.log
+            poc-help.log
+            *.gcode.3mf
+          retention-days: 7
+
+      - name: POC summary gate
+        if: always()
+        run: |
+          echo "help   exit: ${{ steps.help.outputs.exit_code }}"
+          echo "3mf    exit: ${{ steps.slice3mf.outputs.exit_code }}"
+          echo "stl    exit: ${{ steps.slicestl.outputs.exit_code }}"
