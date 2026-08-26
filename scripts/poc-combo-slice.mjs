@@ -76,7 +76,10 @@ console.log(`  prediction=${pred}s (${(Number(pred) / 60).toFixed(1)}min) weight
 
 failures += assertCfg("layer_height", String(request.layerHeight ?? resolved.process.layer_height)) ? 0 : 1;
 failures += assertCfg("sparse_infill_density", String(resolved.process.sparse_infill_density)) ? 0 : 1;
-failures += assertCfg("enable_support", request.supports === false ? "0" : "1") ? 0 : 1;
+failures += assertCfg("enable_support", String(resolved.process.enable_support)) ? 0 : 1;
+// Bambu's own verdict: used_for_support must match the resolved setting.
+const expectedSup = String(resolved.process.enable_support) === "1";
+check(`slice_info supportUsed === ${expectedSup}`, sup === expectedSup);
 if (resolved.filament.nozzle_temperature) {
   failures += assertCfg("nozzle_temperature", resolved.filament.nozzle_temperature[0]) ? 0 : 1;
 }

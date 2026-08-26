@@ -204,15 +204,18 @@ jobs:
           set +e
           FAILS=0
           run_combo () {
-            node scripts/poc-combo-slice.mjs "$1" test-fixtures/krb-cube-20mm.stl /usr/local/bin/bambu-studio "combo-$2"
+            node scripts/poc-combo-slice.mjs "$1" "$3" /usr/local/bin/bambu-studio "combo-$2"
             [ $? -ne 0 ] && FAILS=$((FAILS+1))
           }
-          run_combo '{"material":"pla","quality":"fast"}' pla-fast
-          run_combo '{"material":"petg","quality":"standard"}' petg-std
-          run_combo '{"material":"abs","quality":"standard"}' abs-std
-          run_combo '{"material":"pla","quality":"standard","layerHeight":0.12}' pla-std-lh012
-          run_combo '{"material":"pla","quality":"standard","infill":60}' pla-std-infill60
-          run_combo '{"material":"pla","quality":"standard","supports":false}' pla-std-nosup
+          CUBE=test-fixtures/krb-cube-20mm.stl
+          CHIBI=test-fixtures/chibi-roger-federer-elegant-backhand-tennis.stl
+          run_combo '{"material":"pla","quality":"standard","supports":"none"}' chibi-none "$CHIBI"
+          run_combo '{"material":"pla","quality":"standard","supports":"auto"}' chibi-auto "$CHIBI"
+          run_combo '{"material":"pla","quality":"fast"}' pla-fast "$CUBE"
+          run_combo '{"material":"petg","quality":"standard"}' petg-std "$CUBE"
+          run_combo '{"material":"abs","quality":"standard"}' abs-std "$CUBE"
+          run_combo '{"material":"pla","quality":"standard","layerHeight":0.12}' pla-std-lh012 "$CUBE"
+          run_combo '{"material":"pla","quality":"standard","infill":60}' pla-std-infill60 "$CUBE"
           echo "combo_failures=$FAILS"
           exit $FAILS
 
