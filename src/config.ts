@@ -12,6 +12,9 @@ export const config = {
   /** Path to PrusaSlicer CLI binary (prusa backend) or Bambu CLI (bambu backend). */
   slicerPath: process.env.SLICER_PATH ?? "prusa-slicer",
 
+  /** Directory holding official pinned Bambu profile fragments. */
+  profilesDir: process.env.BAMBU_CONFIG_DIR ?? "profiles/bambu",
+
   /** Maximum time (ms) a single PrusaSlicer execution can run. */
   sliceTimeoutMs: parseInt(process.env.SLICE_TIMEOUT_MS ?? "300000", 10),
 

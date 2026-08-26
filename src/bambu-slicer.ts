@@ -22,10 +22,15 @@ import { config } from "./config.js";
 import type { SliceExecution } from "./slicer.js";
 import { isCompleteBambuResult, parseBambuSliceInfo } from "./bambu-poc-result.js";
 import { resolveBambuConfig, type BambuSliceRequest } from "./bambu-config.js";
-import { extractFileFromZip, getUncompressedSize } from "./bambu-zip.js";
+import {
+  inspectBambuProject,
+  materializePlannedArchive,
+  planBambu3mfSlice,
+} from "./bambu-project.js";
+import { extractFileFromZip, listZipEntries } from "./bambu-zip.js";
 
-const GCODE_3MF_NAME = "Metadata/plate_1.gcode";
 const SLICE_INFO_NAME = "Metadata/slice_info.config";
+const OUTPUT_GCODE_RE = /(^|\/)Metadata\/plate_\d+\.gcode$/i;
 
 /** Check Bambu CLI availability at the configured path. */
 export async function checkBambu(): Promise<boolean> {
@@ -43,6 +48,13 @@ export async function checkBambu(): Promise<boolean> {
 /**
  * Slice with the resolved KRB A1 configuration for this request
  * (material + quality + optional advanced overrides).
+ *
+ * File-type aware:
+ *   .stl → legacy full-KRB configuration (unchanged production path)
+ *   .3mf → direct Bambu project slicing:
+ *            pure    : original 3MF, embedded settings preserved (A1-compat)
+ *            patched : embedded settings + explicit KRB override keys only
+ *            fallback: non-A1 / unknown projects get the full KRB trio
  */
 export async function runBambuSlicer(
   inputFile: string,
@@ -50,22 +62,101 @@ export async function runBambuSlicer(
   request: BambuSliceRequest,
 ): Promise<SliceExecution> {
   const out3mf = join(outputDir, "output.gcode.3mf");
+
+  const ext = inputFile.split(".").pop()?.toLowerCase() ?? "";
+  let sliceInput = inputFile;
+  let args: string[];
+
+  if (ext === "3mf") {
+    // ── Direct-3MF path ────────────────────────────────────────────
+    const info = await inspectBambuProject(inputFile);
+    if (!info) {
+      return {
+        success: false,
+        result: null,
+        error: "Uploaded 3MF could not be read as a Bambu project archive",
+        stdout: "",
+        stderr: "",
+      };
+    }
+
+    const plan = await planBambu3mfSlice(request, info, async (name) => {
+      const raw = await readFile(join(config.profilesDir, name), "utf-8");
+      return JSON.parse(raw) as Record<string, unknown>;
+    });
+
+    console.log(
+      `[bambu-3mf] plates=${info.plateCount} printer=${info.printerModel ?? "?"}/${info.printerVariant ?? "?"} ` +
+        `filament=[${info.filamentTypes.join(",") || "?"}] mode=${plan.mode} — ${plan.reason}`,
+    );
+
+    if (plan.mode === "legacy-fallback") {
+      // Machine safety: never trust a foreign machine config. Slice with the
+      // full authoritative KRB trio instead.
+      const legacy = await buildLegacyArgs(inputFile, outputDir, request);
+      if ("error" in legacy) return legacy;
+      args = legacy.args;
+    } else {
+      // Both pure and patched get a working copy with stale embedded
+      // results stripped (patched adds surgical override keys).
+      const original = await readFile(inputFile);
+      const rewritten = materializePlannedArchive(original, plan);
+      if (!rewritten) {
+        return {
+          success: false,
+          result: null,
+          error: "Failed to prepare the 3MF project for slicing",
+          stdout: "",
+          stderr: "",
+        };
+      }
+      sliceInput = join(outputDir, "krb-project.3mf");
+      await writeFile(sliceInput, rewritten);
+      // Zero settings flags — Bambu uses the embedded project.
+      args = ["--slice", "0", "--export-3mf", out3mf, sliceInput];
+    }
+  } else {
+    // ── STL: unchanged production path ──────────────────────────────
+    const legacy = await buildLegacyArgs(inputFile, outputDir, request);
+    if ("error" in legacy) return legacy;
+    args = legacy.args;
+  }
+
+  return spawnBambu(args, out3mf);
+}
+
+/** Full authoritative KRB configuration (machine+process+filaments). */
+async function buildLegacyArgs(
+  inputFile: string,
+  outputDir: string,
+  request: BambuSliceRequest,
+): Promise<{ args: string[] } | { error: string; success: false; result: null; stdout: string; stderr: string }> {
   const cfgDir = join(outputDir, "bambu-cfg");
   const machineCfgPath = join(cfgDir, "machine.json");
   const processCfgPath = join(cfgDir, "process.json");
   const filamentCfgPath = join(cfgDir, "filament.json");
 
-  let machineCfg: Record<string, unknown>;
   try {
     const resolved = await resolveBambuConfig(request);
-    // Materialize typed config files for the CLI loader.
     await mkdir(cfgDir, { recursive: true });
-    machineCfg = resolved.machine;
     await Promise.all([
       writeFile(machineCfgPath, JSON.stringify(resolved.machine)),
       writeFile(processCfgPath, JSON.stringify(resolved.process)),
       writeFile(filamentCfgPath, JSON.stringify(resolved.filament)),
     ]);
+    return {
+      args: [
+        "--slice",
+        "0",
+        "--load-settings",
+        `${machineCfgPath};${processCfgPath}`,
+        "--load-filaments",
+        filamentCfgPath,
+        "--export-3mf",
+        join(outputDir, "output.gcode.3mf"),
+        inputFile,
+      ],
+    };
   } catch (err) {
     return {
       success: false,
@@ -77,20 +168,9 @@ export async function runBambuSlicer(
       stderr: "",
     };
   }
+}
 
-  const args = [
-    "--slice",
-    "0",
-    "--load-settings",
-    `${machineCfgPath};${processCfgPath}`,
-    "--load-filaments",
-    filamentCfgPath,
-    "--export-3mf",
-    out3mf,
-    inputFile,
-  ];
-  void machineCfg;
-
+function spawnBambu(args: string[], out3mf: string): Promise<SliceExecution> {
   return new Promise((resolve) => {
     let stderr = "";
     let killed = false;
@@ -141,7 +221,8 @@ export async function runBambuSlicer(
         return;
       }
 
-      // Extract results from the .gcode.3mf archive.
+      // Extract results from the .gcode.3mf archive. The sliced plate may
+      // be any index — locate the gcode entry instead of assuming plate_1.
       try {
         const archive = await readFile(out3mf);
         const sliceInfoRaw = extractFileFromZip(archive, SLICE_INFO_NAME);
@@ -154,8 +235,9 @@ export async function runBambuSlicer(
             `incomplete Bambu slice_info (prediction=${parsed.printTimeSeconds}, weight=${parsed.filamentWeightGrams})`,
           );
         }
-        const gcodeSize =
-          getUncompressedSize(archive, GCODE_3MF_NAME) ?? 0;
+        const entries = listZipEntries(archive) ?? [];
+        const gcodeEntry = entries.find((e) => OUTPUT_GCODE_RE.test(e.name));
+        const gcodeSize = gcodeEntry?.uncompressedSize ?? 0;
 
         resolve({
           success: true,
