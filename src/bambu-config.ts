@@ -39,8 +39,9 @@ export interface BambuSliceRequest {
   layerHeight?: number | string;
   /** percent number (60) or string ("60%") — advanced override */
   infill?: number | string;
-  /** advanced override; undefined keeps preset/profile default */
-  supports?: boolean;
+  /** advanced override. Accepts boolean or the UI's string forms
+   *  ("auto"/"none", plus defensive aliases). Undefined keeps default. */
+  supports?: boolean | number | string;
 }
 
 export interface ResolvedBambuConfig {
@@ -80,6 +81,30 @@ function normalizeInfill(infill: number | string): string {
   return s.endsWith("%") ? s : `${s}%`;
 }
 
+const SUPPORTS_TRUE = new Set(["auto", "true", "yes", "on", "1"]);
+const SUPPORTS_FALSE = new Set(["none", "false", "no", "off", "0"]);
+
+/**
+ * UI sends supports as boolean or the strings "auto"/"none".
+ * Anything unrecognized throws — we never guess and never leave
+ * enable_support at a stale value.
+ */
+function normalizeSupports(value: NonNullable<BambuSliceRequest["supports"]>): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  if (typeof value === "string") {
+    const s = value.trim().toLowerCase();
+    if (SUPPORTS_TRUE.has(s)) return true;
+    if (SUPPORTS_FALSE.has(s)) return false;
+  }
+  throw new Error(
+    `Unsupported supports value '${String(value)}' (expected: auto/none/true/false)`,
+  );
+}
+
 /**
  * Compose the final typed configuration trio. Throws (never falls back to PLA
  * or another preset silently) when material/quality is unsupported.
@@ -109,7 +134,7 @@ export async function resolveBambuConfig(
     process["sparse_infill_density"] = normalizeInfill(request.infill);
   }
   if (request.supports !== undefined && request.supports !== null) {
-    process["enable_support"] = request.supports ? "1" : "0";
+    process["enable_support"] = normalizeSupports(request.supports) ? "1" : "0";
   }
 
   // Stamp CLI loader metadata (from/user + type are mandatory, see

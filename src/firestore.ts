@@ -62,10 +62,11 @@ export interface SliceJobData {
   fileType: string;
   material: string;
   quality: string;
-  /** Optional advanced overrides (Custom Print UI). Undefined = preset default. */
+  /** Optional advanced overrides (Custom Print UI). Undefined = preset default.
+   *  supports arrives as boolean or the UI strings "auto"/"none". */
   layerHeight?: number;
   infill?: number;
-  supports?: boolean;
+  supports?: boolean | string;
   status: JobStatus;
   result: unknown | null;
   error: string | null;

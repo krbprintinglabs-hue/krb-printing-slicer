@@ -59,11 +59,20 @@ import("./dist/bambu-config.js").then(async (m) => {
   assert.strictEqual(adv4.process.layer_height, "0.24");
   assert.strictEqual(adv4.process.sparse_infill_density, "100%");
   assert.strictEqual(adv4.process.enable_support, "1");
-  console.log("PASS advanced: overrides take priority over presets");
+
+  // 4b) supports string vocabulary (production UI payloads)
+  const sAuto = await resolveBambuConfig({ material: "pla", quality: "standard", supports: "auto" });
+  assert.strictEqual(sAuto.process.enable_support, "1", "supports='auto' must enable");
+  const sNone = await resolveBambuConfig({ material: "pla", quality: "standard", supports: "none" });
+  assert.strictEqual(sNone.process.enable_support, "0", "supports='none' must disable (regression T8)");
+  const sNone2 = await resolveBambuConfig({ material: "pla", quality: "standard", supports: false });
+  assert.strictEqual(sNone2.process.enable_support, "0");
+  console.log("PASS advanced: overrides take priority over presets; supports auto/none handled");
 
   // 5) unsupported combos fail loudly, never fall back to PLA
   await assert.rejects(() => resolveBambuConfig({ material: "tpu", quality: "standard" }), /Unsupported material 'tpu'/);
   await assert.rejects(() => resolveBambuConfig({ material: "pla", quality: "ultra" }), /Unsupported quality 'ultra'/);
+  await assert.rejects(() => resolveBambuConfig({ material: "pla", quality: "standard", supports: "maybe" }), /Unsupported supports value 'maybe'/);
   console.log("PASS unsupported: loud errors, no silent fallback");
 
   console.log("ALL RESOLVER TESTS PASSED");
