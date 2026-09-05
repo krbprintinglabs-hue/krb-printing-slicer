@@ -89,12 +89,14 @@ jobs:
       # needed on the runner. Cached between runs.
       - name: Cache PrusaSlicer
         id: prusaslicer_cache
+        if: inputs.backend == 'prusa'
         uses: actions/cache@v4
         with:
           path: ~/prusaslicer-appimage
           key: prusaslicer-${{ env.PRUSASLICER_VERSION }}-x86_64
 
       - name: Install PrusaSlicer runtime libraries
+        if: inputs.backend == 'prusa'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -134,7 +136,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Download and extract PrusaSlicer
-        if: steps.prusaslicer_cache.outputs.cache-hit != 'true'
+        if: inputs.backend == 'prusa' && steps.prusaslicer_cache.outputs.cache-hit != 'true'
         env:
           PRUSASLICER_URL: https://github.com/gneiss15/PrusaSlicer.AppImage/releases/download/${{ env.PRUSASLICER_VERSION }}/PrusaSlicer-${{ env.PRUSASLICER_VERSION }}-x86_64_GN.AppImage
         run: |
@@ -156,6 +158,7 @@ jobs:
       # LANG/LC_ALL=en_US.UTF-8 are provided by the "Generate UTF-8 locale"
       # step; no library paths are forced manually.
       - name: Expose PrusaSlicer on PATH
+        if: inputs.backend == 'prusa'
         run: |
           ROOT="$HOME/prusaslicer-appimage/squashfs-root"
           APPRUN="$ROOT/AppRun"
