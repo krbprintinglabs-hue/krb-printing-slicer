@@ -42,8 +42,28 @@ Set these in GitHub -> Settings -> Secrets and variables -> Actions:
 | `FIREBASE_PROJECT_ID` | Your Firebase project ID |
 | `SUPABASE_URL` | Your Supabase project URL (e.g. `https://<project>.supabase.co`) |
 | `SUPABASE_SERVICE_KEY` | Supabase service key — server-side only, never exposed to the browser |
+| `B2_ENDPOINT` | Backblaze B2 S3-compatible endpoint (e.g. `https://s3.us-west-004.backblazeb2.com`) |
+| `B2_KEY_ID` | Backblaze B2 S3 key ID — server-side only, never exposed to the browser |
+| `B2_APPLICATION_KEY` | Backblaze B2 S3 application key — server-side only, never exposed to the browser |
+| `B2_BUCKET_NAME` | Backblaze B2 bucket holding uploaded models |
 
 The storage bucket is not a secret: the workflow passes `SUPABASE_BUCKET=custom-prints` to the worker.
+
+## Model Storage Backends
+
+The worker downloads the job's model from one of two backends, selected per
+job by the `storagePath` prefix in the Firestore `sliceJobs` document:
+
+| storagePath | Backend |
+|-------------|---------|
+| `b2:custom-prints/<owner>/<upload>/model.stl` | Backblaze B2 (S3-compatible API) |
+| `<owner>/<upload>/model.stl` (no prefix) | Supabase Storage (legacy) |
+
+The `b2:` prefix is only a backend marker: it is stripped before any S3
+operation, i.e. `b2:custom-prints/foo/bar.3mf` is fetched as object key
+`custom-prints/foo/bar.3mf` (with a leading bucket segment tolerated and
+stripped, so in practice the key sent is `foo/bar.3mf` against
+`B2_BUCKET_NAME`). Legacy Supabase references keep working unchanged.
 
 ### 3. Website Server Environment Variables
 
@@ -140,7 +160,8 @@ src/
 ├── config.ts      — Environment configuration
 ├── firestore.ts   — Admin SDK, atomic job claiming
 ├── supabase.ts    — Supabase Storage REST download (service key)
-├── storage.ts     — Model download layer (Supabase-backed)
+├── b2.ts          — Backblaze B2 S3-compatible download (`b2:` references)
+├── storage.ts     — Model download layer (B2/Supabase dispatcher)
 ├── slicer.ts      — PrusaSlicer CLI execution
 ├── jobs.ts        — Job lifecycle orchestration
 ├── cleanup.ts     — Temp file cleanup (local dev only)

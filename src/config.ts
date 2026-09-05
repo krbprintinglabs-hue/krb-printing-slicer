@@ -38,6 +38,18 @@ export const config = {
 
   /** Private Supabase Storage bucket holding uploaded models. */
   supabaseBucket: process.env.SUPABASE_BUCKET ?? "custom-prints",
+
+  /** Backblaze B2 S3-compatible endpoint (e.g. https://s3.us-west-004.backblazeb2.com). */
+  b2Endpoint: process.env.B2_ENDPOINT ?? "",
+
+  /** Backblaze B2 S3 key ID — server-side only, never exposed to browsers. */
+  b2KeyId: process.env.B2_KEY_ID ?? "",
+
+  /** Backblaze B2 S3 application key — server-side only, never exposed to browsers. */
+  b2ApplicationKey: process.env.B2_APPLICATION_KEY ?? "",
+
+  /** Backblaze B2 bucket holding uploaded models. */
+  b2BucketName: process.env.B2_BUCKET_NAME ?? "",
 } as const;
 
 /**
